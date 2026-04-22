@@ -5,8 +5,8 @@ import os
 # ==========================================
 # 환경변수
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("8603001067:AAEtlhd8z5osphG0s-pKkVWJUjol-PA7H9s")
-CHAT_ID = os.getenv("8757371550")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 # ==========================================
 # 기준값
