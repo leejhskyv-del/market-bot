@@ -69,13 +69,32 @@ def get_drawdown():
     return round((current - peak) / peak * 100, 1)
 
 # ==========================================
-# 달러
+# 달러 (DXY)
 # ==========================================
 def get_dxy():
     try:
         return round(yf.Ticker("DX-Y.NYB").history(period="1d")['Close'].iloc[-1], 2)
     except:
         return 100
+
+# ==========================================
+# 원달러 환율
+# ==========================================
+def get_usdkrw():
+    try:
+        return round(yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1], 2)
+    except:
+        return 1300
+
+def get_fx_status(usdkrw):
+    if usdkrw >= 1400:
+        return "🚨 매우 높음 (환전 비추천)"
+    elif usdkrw >= 1350:
+        return "⚠️ 높음 (환전 주의)"
+    elif usdkrw >= 1300:
+        return "중립"
+    else:
+        return "💎 낮음 (환전 기회)"
 
 # ==========================================
 # 점수 시스템
@@ -190,6 +209,7 @@ def run():
         rsi = get_rsi()
         dd = get_drawdown()
         dxy = get_dxy()
+        usdkrw = get_usdkrw()
 
         score, details = calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy)
         level = score_to_level(score)
@@ -215,7 +235,9 @@ def run():
         f"VIX: {vix} (Δ {vix_change*100:.1f}%)\n"
         f"SPY: {spy} / 200MA: {ma200}\n"
         f"금리: {tnx}% | RSI: {rsi}\n"
-        f"낙폭: {dd}% | 달러: {dxy}"
+        f"낙폭: {dd}%\n"
+        f"달러(DXY): {dxy}\n"
+        f"환율: {usdkrw} → {get_fx_status(usdkrw)}"
         )
 
         if vix_change >= VIX_SPIKE_THRESHOLD:
