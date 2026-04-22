@@ -32,8 +32,7 @@ def get_market_status():
     spy = round(spy_hist['Close'].iloc[-1], 2)
     ma200 = round(spy_hist['Close'].rolling(200).mean().iloc[-1], 2)
 
-    tnx_hist = yf.Ticker("^TNX").history(period="5d")
-    tnx = round(tnx_hist['Close'].iloc[-1], 2)
+    tnx = round(yf.Ticker("^TNX").history(period="5d")['Close'].iloc[-1], 2)
 
     return vix, vix_change, spy, ma200, tnx
 
@@ -79,99 +78,108 @@ def get_dxy():
         return 100
 
 # ==========================================
-# 해석 함수
+# 점수 시스템
 # ==========================================
-def get_vix_zone(vix):
+def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy):
+    score = 0
+    details = []
+
     if vix >= 40:
-        return "40+ (패닉)"
-    elif vix >= 35:
-        return "35~40 (극도위험)"
-    elif vix >= 28:
-        return "28~35 (경고)"
+        score += 3
+        details.append("VIX 패닉 +3")
+    elif vix >= 30:
+        score += 2
+        details.append("VIX 상승 +2")
     elif vix >= 20:
-        return "20~28 (주의)"
-    else:
-        return "0~20 (안정)"
+        score += 1
+        details.append("VIX 주의 +1")
 
-def get_spy_status(spy, ma200):
-    diff = round((spy - ma200) / ma200 * 100, 1)
-    return f"{'🔴 하락추세' if spy < ma200 else '🟢 상승추세'} ({diff}%)"
+    if vix_change >= 0.1:
+        score += 2
+        details.append("VIX 급등 +2")
 
-def get_rate_status(tnx):
-    if tnx >= 4.5:
-        return "🚨 매우 높음"
-    elif tnx >= 4.0:
-        return "⚠️ 높음"
-    elif tnx >= 3.0:
-        return "🟡 보통"
-    else:
-        return "🟢 낮음"
+    if spy < ma200:
+        score += 2
+        details.append("하락추세 +2")
 
-def get_rsi_status(rsi):
     if rsi < 30:
-        return "💎 과매도 (매수 기회)"
+        score += 1
+        details.append("과매도 +1")
     elif rsi > 70:
-        return "🔥 과열"
-    else:
-        return "중립"
+        score -= 1
+        details.append("과열 -1")
 
-def get_dd_status(dd):
     if dd <= -20:
-        return "💎 베어마켓"
+        score += 3
+        details.append("베어마켓 +3")
     elif dd <= -10:
-        return "⚠️ 조정"
+        score += 2
+        details.append("조정 +2")
     elif dd <= -5:
-        return "주의 조정"
-    else:
-        return "정상"
+        score += 1
+        details.append("약조정 +1")
 
-def get_dxy_status(dxy):
-    if dxy > 105:
-        return "🚨 달러 강세"
-    elif dxy > 100:
-        return "⚠️ 강세"
-    else:
-        return "🟢 안정"
+    if tnx >= 4.5:
+        score += 2
+        details.append("금리위험 +2")
+    elif tnx >= 4.0:
+        score += 1
+        details.append("금리부담 +1")
 
-def get_level(vix, vix_change, spy, ma200):
-    is_bear = spy < ma200
+    if dxy >= 105:
+        score += 2
+        details.append("달러강세 +2")
+    elif dxy >= 100:
+        score += 1
+        details.append("달러상승 +1")
 
-    if vix >= 40:
+    return score, details
+
+def score_to_level(score):
+    if score >= 9:
         return 4
-    elif vix >= 35 and is_bear:
+    elif score >= 6:
         return 3
-    elif vix >= 28 or is_bear or vix_change >= 0.1:
+    elif score >= 4:
         return 2
-    elif vix >= 20:
+    elif score >= 2:
         return 1
     else:
         return 0
 
+# ==========================================
+# 투자 판단
+# ==========================================
+def get_invest_ratio(level):
+    return {0:1.0, 1:0.7, 2:0.4, 3:0.2, 4:1.3}[level]
+
 def get_action(level):
     return [
-        "포지션 유지 / 분할매수 가능",
-        "신규 매수 천천히",
-        "비중 축소 검토",
-        "현금 비중 확대",
-        "분할매수 시작 (공포)"
+        "적극 매수",
+        "분할매수 유지",
+        "비중 축소 / 일부 익절",
+        "현금 확보 / 방어",
+        "공포 매수 (강하게)"
     ][level]
+
+def get_sell_signal(level):
+    if level >= 3:
+        return "수익난 종목 일부 익절 (20~40%)"
+    elif level == 2:
+        return "일부 익절 고려"
+    else:
+        return "보유 유지"
 
 # ==========================================
 # 텔레그램
 # ==========================================
 def send(msg):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("❌ 토큰 없음")
+        print("토큰 없음")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
-    res = requests.get(url, params={
-        "chat_id": CHAT_ID,
-        "text": msg
-    })
-
-    print(res.text)
+    requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
 
 # ==========================================
 # 실행
@@ -183,34 +191,31 @@ def run():
         dd = get_drawdown()
         dxy = get_dxy()
 
-        level = get_level(vix, vix_change, spy, ma200)
+        score, details = calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy)
+        level = score_to_level(score)
+
+        ratio = get_invest_ratio(level)
+        action = get_action(level)
+        sell = get_sell_signal(level)
+
+        detail_text = "\n".join(details)
 
         msg = (
-        "📊 시장 종합 리포트\n\n"
-        f"🔥 단계: {level}단계\n"
-        f"👉 전략: {get_action(level)}\n\n"
+        "🤖 자동 투자 판단 시스템\n\n"
 
-        "[변동성]\n"
+        f"🔥 단계: {level}단계 | 점수: {score}\n"
+        f"👉 행동: {action}\n"
+        f"👉 매수 비중: {int(ratio*100)}%\n"
+        f"👉 매도 전략: {sell}\n\n"
+
+        "[판단 근거]\n"
+        f"{detail_text}\n\n"
+
+        "[시장 지표]\n"
         f"VIX: {vix} (Δ {vix_change*100:.1f}%)\n"
-        f"→ {get_vix_zone(vix)}\n\n"
-
-        "[추세]\n"
         f"SPY: {spy} / 200MA: {ma200}\n"
-        f"→ {get_spy_status(spy, ma200)}\n\n"
-
-        "[금리]\n"
-        f"10Y: {tnx}%\n"
-        f"→ {get_rate_status(tnx)}\n\n"
-
-        "[타이밍]\n"
-        f"RSI: {rsi}\n"
-        f"→ {get_rsi_status(rsi)}\n"
-        f"낙폭: {dd}%\n"
-        f"→ {get_dd_status(dd)}\n\n"
-
-        "[환경]\n"
-        f"달러: {dxy}\n"
-        f"→ {get_dxy_status(dxy)}"
+        f"금리: {tnx}% | RSI: {rsi}\n"
+        f"낙폭: {dd}% | 달러: {dxy}"
         )
 
         if vix_change >= VIX_SPIKE_THRESHOLD:
