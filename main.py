@@ -3,26 +3,37 @@ import requests
 import os
 import pandas as pd
 
+# ==========================================
+# 환경변수
+# ==========================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-VIX_L1, VIX_L2, VIX_L3, VIX_L4 = 20, 28, 35, 40
 VIX_SPIKE_THRESHOLD = 0.1
 
 # ==========================================
 # 데이터 수집
 # ==========================================
 def get_market_status():
-    vix_hist = yf.Ticker("^VIX").history(period="2d")
+    vix_hist = yf.Ticker("^VIX").history(period="5d")
+
+    if len(vix_hist) < 2:
+        raise Exception("VIX 데이터 부족")
+
     vix = round(vix_hist['Close'].iloc[-1], 2)
     prev_vix = round(vix_hist['Close'].iloc[-2], 2)
     vix_change = round((vix - prev_vix) / prev_vix, 3)
 
     spy_hist = yf.Ticker("SPY").history(period="300d")
+
+    if len(spy_hist) < 200:
+        raise Exception("SPY 데이터 부족")
+
     spy = round(spy_hist['Close'].iloc[-1], 2)
     ma200 = round(spy_hist['Close'].rolling(200).mean().iloc[-1], 2)
 
-    tnx = round(yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1], 2)
+    tnx_hist = yf.Ticker("^TNX").history(period="5d")
+    tnx = round(tnx_hist['Close'].iloc[-1], 2)
 
     return vix, vix_change, spy, ma200, tnx
 
@@ -31,11 +42,17 @@ def get_market_status():
 # ==========================================
 def get_rsi():
     data = yf.Ticker("SPY").history(period="100d")
+
+    if len(data) < 20:
+        return 50
+
     delta = data['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
+
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
+
     return round(rsi.iloc[-1], 1)
 
 # ==========================================
@@ -43,15 +60,23 @@ def get_rsi():
 # ==========================================
 def get_drawdown():
     data = yf.Ticker("SPY").history(period="1y")
+
+    if len(data) == 0:
+        return 0
+
     peak = data['Close'].max()
     current = data['Close'].iloc[-1]
+
     return round((current - peak) / peak * 100, 1)
 
 # ==========================================
-# 달러 인덱스
+# 달러
 # ==========================================
 def get_dxy():
-    return round(yf.Ticker("DX-Y.NYB").history(period="1d")['Close'].iloc[-1], 2)
+    try:
+        return round(yf.Ticker("DX-Y.NYB").history(period="1d")['Close'].iloc[-1], 2)
+    except:
+        return 100
 
 # ==========================================
 # 해석 함수
@@ -102,7 +127,7 @@ def get_dd_status(dd):
 
 def get_dxy_status(dxy):
     if dxy > 105:
-        return "🚨 달러 강세 (위험자산 압박)"
+        return "🚨 달러 강세"
     elif dxy > 100:
         return "⚠️ 강세"
     else:
@@ -110,6 +135,7 @@ def get_dxy_status(dxy):
 
 def get_level(vix, vix_change, spy, ma200):
     is_bear = spy < ma200
+
     if vix >= 40:
         return 4
     elif vix >= 35 and is_bear:
@@ -134,53 +160,65 @@ def get_action(level):
 # 텔레그램
 # ==========================================
 def send(msg):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("❌ 토큰 없음")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
+
+    res = requests.get(url, params={
+        "chat_id": CHAT_ID,
+        "text": msg
+    })
+
+    print(res.text)
 
 # ==========================================
 # 실행
 # ==========================================
 def run():
-    vix, vix_change, spy, ma200, tnx = get_market_status()
-    rsi = get_rsi()
-    dd = get_drawdown()
-    dxy = get_dxy()
+    try:
+        vix, vix_change, spy, ma200, tnx = get_market_status()
+        rsi = get_rsi()
+        dd = get_drawdown()
+        dxy = get_dxy()
 
-    level = get_level(vix, vix_change, spy, ma200)
+        level = get_level(vix, vix_change, spy, ma200)
 
-    msg = f"""
-📊 시장 종합 리포트
+        msg = (
+        "📊 시장 종합 리포트\n\n"
+        f"🔥 단계: {level}단계\n"
+        f"👉 전략: {get_action(level)}\n\n"
 
-🔥 단계: {level}단계
-👉 전략: {get_action(level)}
+        "[변동성]\n"
+        f"VIX: {vix} (Δ {vix_change*100:.1f}%)\n"
+        f"→ {get_vix_zone(vix)}\n\n"
 
-[변동성]
-VIX: {vix} (Δ {vix_change*100:.1f}%)
-→ {get_vix_zone(vix)}
+        "[추세]\n"
+        f"SPY: {spy} / 200MA: {ma200}\n"
+        f"→ {get_spy_status(spy, ma200)}\n\n"
 
-[추세]
-SPY: {spy} / 200MA: {ma200}
-→ {get_spy_status(spy, ma200)}
+        "[금리]\n"
+        f"10Y: {tnx}%\n"
+        f"→ {get_rate_status(tnx)}\n\n"
 
-[금리]
-10Y: {tnx}%
-→ {get_rate_status(tnx)}
+        "[타이밍]\n"
+        f"RSI: {rsi}\n"
+        f"→ {get_rsi_status(rsi)}\n"
+        f"낙폭: {dd}%\n"
+        f"→ {get_dd_status(dd)}\n\n"
 
-[타이밍]
-RSI: {rsi}
-→ {get_rsi_status(rsi)}
+        "[환경]\n"
+        f"달러: {dxy}\n"
+        f"→ {get_dxy_status(dxy)}"
+        )
 
-낙폭: {dd}%
-→ {get_dd_status(dd)}
+        if vix_change >= VIX_SPIKE_THRESHOLD:
+            msg = "⚡ VIX 급등 감지!\n\n" + msg
 
-[환경]
-달러: {dxy}
-→ {get_dxy_status(dxy)}
-"""
+        send(msg)
 
-    if vix_change >= VIX_SPIKE_THRESHOLD:
-        msg = "⚡ VIX 급등 감지!\n" + msg
-
-    send(msg)
+    except Exception as e:
+        send(f"❌ 에러 발생: {e}")
 
 run()
