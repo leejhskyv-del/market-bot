@@ -1,25 +1,21 @@
 import yfinance as yf
 import requests
-import time
 import os
-from datetime import datetime
 
 # ==========================================
-# 1. 환경변수 (Render에서 설정)
+# 환경변수
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("8603001067:AAEtlhd8z5osphG0s-pKkVWJUjol-PA7H9s")
-CHAT_ID = os.getenv("8757371550")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 # ==========================================
-# 2. 기준값 설정
+# 기준값
 # ==========================================
 VIX_L1, VIX_L2, VIX_L3, VIX_L4 = 20, 28, 35, 40
-VIX_SPIKE_THRESHOLD = 0.1   # 🔥 10% 급등
-
-CNN_LINK = "https://www.cnn.com/markets/fear-and-greed"
+VIX_SPIKE_THRESHOLD = 0.1
 
 # ==========================================
-# 3. 데이터 가져오기
+# 데이터 가져오기
 # ==========================================
 def get_market_status():
     vix_hist = yf.Ticker("^VIX").history(period="2d")
@@ -36,104 +32,63 @@ def get_market_status():
 
     is_bear = spy_price < ma200
 
-    return vix, prev_vix, vix_change, spy_price, ma200, tnx, is_bear
+    return vix, vix_change, spy_price, ma200, tnx, is_bear
 
 # ==========================================
-# 4. 텔레그램 전송
+# 텔레그램
 # ==========================================
 def send_telegram(msg):
-    if not msg:
-        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.get(url, params={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
 
 # ==========================================
-# 5. 시작 알림
+# 단계 판단
 # ==========================================
-def send_start_report():
-    vix, prev_vix, vix_change, spy, ma200, tnx, is_bear = get_market_status()
-
-    msg = f"""
-🚀 **시장 감시 시스템 시작**
-
-📊 현재 상태
-• VIX: {vix} (변화율: {vix_change*100:.1f}%)
-• SPY: {spy} (200MA: {ma200})
-• 금리: {tnx}%
-• 추세: {'🔴 하락장' if is_bear else '🟢 상승장'}
-
-이제부터 1시간마다 감시합니다.
-"""
-    send_telegram(msg)
+def get_level(vix, vix_change, is_bear):
+    if vix >= VIX_L4:
+        return 4
+    elif vix >= VIX_L3 and is_bear:
+        return 3
+    elif vix >= VIX_L2 or is_bear or vix_change >= VIX_SPIKE_THRESHOLD:
+        return 2
+    elif vix >= VIX_L1:
+        return 1
+    else:
+        return 0
 
 # ==========================================
-# 6. 메인 루프
+# 실행 (1회)
 # ==========================================
-def run_monitor():
-    last_level = -1
+def run_once():
+    vix, vix_change, spy, ma200, tnx, is_bear = get_market_status()
+    level = get_level(vix, vix_change, is_bear)
 
-    while True:
-        try:
-            vix, prev_vix, vix_change, spy, ma200, tnx, is_bear = get_market_status()
-
-            level = 0
-            spike = vix_change >= VIX_SPIKE_THRESHOLD
-
-            # 🔥 단계 판정 (개선 버전)
-            if vix >= VIX_L4:
-                level = 4
-            elif vix >= VIX_L3 and is_bear:
-                level = 3
-            elif vix >= VIX_L2 or is_bear or spike:
-                level = 2
-            elif vix >= VIX_L1:
-                level = 1
-
-            info = f"""
-
-📊 **실시간 상태**
+    # 기본 정보
+    info = f"""
+📊 시장 상태
 • VIX: {vix} (Δ {vix_change*100:.1f}%)
 • SPY: {spy} / 200MA: {ma200}
 • 금리: {tnx}%
 • 추세: {'🔴 하락' if is_bear else '🟢 상승'}
 """
 
-            msg = ""
+    # 단계별 메시지
+    if level == 4:
+        msg = "💎 [4단계: 역발상 구간] 패닉셀링 → 분할매수 검토\n"
+    elif level == 3:
+        msg = "🚨 [3단계: 극도 위험] 시장 붕괴 구간\n"
+    elif level == 2:
+        msg = "⚠️ [2단계: 경고] 변동성 확대 / 추세 이탈\n"
+    elif level == 1:
+        msg = "🔔 [1단계: 주의] 불안 신호 발생\n"
+    else:
+        msg = "✅ [안정] 시장 정상 상태\n"
 
-            # 🔥 급등 알림 (핵심)
-            if spike:
-                msg += f"⚡ **VIX 급등 감지! (+{vix_change*100:.1f}%)**\n"
+    # 급등 별도 표시
+    if vix_change >= VIX_SPIKE_THRESHOLD:
+        msg = "⚡ VIX 급등 감지!\n" + msg
 
-            # 단계 변화 알림
-            if level != last_level:
-                if level == 4:
-                    msg += "💎 [4단계] 패닉 구간 → 역발상 매수 검토\n"
-                elif level == 3:
-                    msg += "🚨 [3단계] 시장 붕괴 → 리스크 관리 필수\n"
-                elif level == 2:
-                    msg += "⚠️ [2단계] 경고 구간\n"
-                elif level == 1:
-                    msg += "🔔 [1단계] 주의 구간\n"
-                elif level == 0:
-                    msg += "✅ 시장 안정화\n"
+    send_telegram(msg + info)
 
-            if msg:
-                msg += info + f"\n🔗 [CNN 지수 보기]({CNN_LINK})"
-                send_telegram(msg)
-
-            last_level = level
-
-            print(f"[{datetime.now()}] VIX:{vix} Δ{vix_change*100:.1f}%")
-
-            time.sleep(3600)
-
-        except Exception as e:
-            print("오류:", e)
-            time.sleep(60)
-
-# ==========================================
 # 실행
-# ==========================================
-if __name__ == "__main__":
-    send_start_report()
-    run_monitor()
+run_once()
