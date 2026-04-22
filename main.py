@@ -35,29 +35,28 @@ def get_market_status():
     gld = round(gld_hist['Close'].iloc[-1], 2)
     gld_ma50 = round(gld_hist['Close'].rolling(50).mean().iloc[-1], 2)
 
+    # RSI는 이미 불러온 spy_hist를 재활용 (가장 효율적)
     delta = spy_hist['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rsi = 100 - (100 / (1 + (gain / loss)))
     
-    peak = spy_hist['Close'].max()
-    dd = (spy - peak) / peak * 100
+    # 🔥 수정 1: 최근 1년(252일) 최고가 기준 낙폭 계산
+    recent_peak = spy_hist['Close'][-252:].max()
+    dd = (spy - recent_peak) / recent_peak * 100
     
-    # 티커를 선물(DX=F)로 변경하고, 휴일 대비 period를 5d로 늘림
     try:
         dxy = round(yf.Ticker("DX=F").history(period="5d")['Close'].iloc[-1], 2)
     except:
-        dxy = 100.0  # 만약 야후 서버가 터지면 임시로 100을 넣어서 프로그램 다운을 방지
+        dxy = 100.0
 
     return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
 
-# 🔥 환율: 1년 평균과 2년 평균을 모두 구합니다.
 def get_fx():
-    # 2년치(영업일 기준 약 504일)를 구하기 위해 넉넉히 3년 데이터를 가져옵니다.
     data = yf.Ticker("KRW=X").history(period="3y") 
     current = round(data['Close'].iloc[-1], 2)
-    avg_1y = round(data['Close'][-252:].mean(), 2)  # 1년(252영업일) 평균
-    avg_2y = round(data['Close'][-504:].mean(), 2)  # 2년(504영업일) 평균
+    avg_1y = round(data['Close'][-252:].mean(), 2)
+    avg_2y = round(data['Close'][-504:].mean(), 2)
     return current, avg_1y, avg_2y
 
 # ==========================================
@@ -70,8 +69,11 @@ def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma2
     elif vix >= 20: score += 1
 
     if vix_change >= 0.1: score += 2
+    
+    # 🔥 수정 2: SPY와 QQQ 점수 배분 완화 (GPT의 elif 오류 수정)
     if spy < ma200: score += 2
-    if qqq < qqq_ma200: score += 2
+    if qqq < qqq_ma200: score += 1  # 2점에서 1점으로 낮춰 과민 반응 방지
+    
     if rsi < 30: score += 1
     elif rsi > 70: score -= 2
     if dd <= -10: score += 2
@@ -87,7 +89,6 @@ def get_action_text(score):
     elif score >= 2: return 1, "🟡 시장 주의", "보유"
     else: return 0, "🔥 자동매수 유지", "보유"
 
-# 🔥 환율: 1년, 2년 복합 판단 로직 적용
 def get_fx_action(current, avg_1y, avg_2y):
     diff_1y = (current - avg_1y) / avg_1y
     diff_2y = (current - avg_2y) / avg_2y
@@ -128,15 +129,18 @@ def main():
         
         score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
         level, status, strategy = get_action_text(score)
-        
-        # 하이브리드 환율 판단 호출
         fx_action = get_fx_action(usd, usd_1y, usd_2y)
 
         last_score = load_state()
         
+        # 🔥 보너스 수정: 패닉 감지 로직 복원
+        crash = True if (last_score is not None and score - last_score >= 3) else False
+        panic = True if (vix >= 45 or crash) else False
+        panic_text = "💀 **패닉 구간 감지 (급락 진행 중)**\n" if panic else ""
+        
         if last_score is None or score != last_score:
             msg = f"""
-🤖 **투자 판단 리포트 (Cron)**
+{panic_text}🤖 **투자 판단 리포트 (Cron)**
 
 🔥 **단계 {level} | 점수 {score}**
 👉 상태: {status}
@@ -167,8 +171,5 @@ def main():
     except Exception as e:
         print(f"오류 발생: {e}")
 
-# ==========================================
-# 프로그램 시작점 (반드시 맨 마지막에 위치해야 함)
-# ==========================================
 if __name__ == "__main__":
     main()
