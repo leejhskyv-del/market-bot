@@ -47,7 +47,7 @@ def get_market_status():
     try:
         dxy = round(yf.Ticker("DX=F").history(period="5d")['Close'].iloc[-1], 2)
     except:
-        dxy = 100.0  # 만약 야후 서버가 또 터지면 임시로 100을 넣어서 프로그램 다운을 방지
+        dxy = 100.0  # 만약 야후 서버가 터지면 임시로 100을 넣어서 프로그램 다운을 방지
 
     return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
 
@@ -124,7 +124,7 @@ def send_telegram(msg):
 def main():
     try:
         vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
-        usd, usd_1y, usd_2y = get_fx() # 변수 3개로 받음
+        usd, usd_1y, usd_2y = get_fx()
         
         score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
         level, status, strategy = get_action_text(score)
@@ -167,5 +167,8 @@ def main():
     except Exception as e:
         print(f"오류 발생: {e}")
 
+# ==========================================
+# 프로그램 시작점 (반드시 맨 마지막에 위치해야 함)
+# ==========================================
 if __name__ == "__main__":
     main()
