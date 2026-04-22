@@ -43,7 +43,11 @@ def get_market_status():
     peak = spy_hist['Close'].max()
     dd = (spy - peak) / peak * 100
     
-    dxy = round(yf.Ticker("DX-Y.NYB").history(period="1d")['Close'].iloc[-1], 2)
+    # 티커를 선물(DX=F)로 변경하고, 휴일 대비 period를 5d로 늘림
+    try:
+        dxy = round(yf.Ticker("DX=F").history(period="5d")['Close'].iloc[-1], 2)
+    except:
+        dxy = 100.0  # 만약 야후 서버가 또 터지면 임시로 100을 넣어서 프로그램 다운을 방지
 
     return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
 
