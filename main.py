@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 
 # ==========================================
-# 1. 설정 및 경로 (환경변수 사용)
+# 1. 설정 및 경로
 # ==========================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -16,7 +16,6 @@ STATE_FILE = os.path.join(BASE_DIR, "state.txt")
 # 2. 데이터 수집 함수
 # ==========================================
 def get_market_status():
-    # 주요 지수 및 지표
     vix_hist = yf.Ticker("^VIX").history(period="5d")
     vix = round(vix_hist['Close'].iloc[-1], 2)
     prev_vix = round(vix_hist['Close'].iloc[-2], 2)
@@ -36,7 +35,6 @@ def get_market_status():
     gld = round(gld_hist['Close'].iloc[-1], 2)
     gld_ma50 = round(gld_hist['Close'].rolling(50).mean().iloc[-1], 2)
 
-    # RSI 및 낙폭 계산
     delta = spy_hist['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
@@ -49,11 +47,14 @@ def get_market_status():
 
     return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
 
+# 🔥 환율: 1년 평균과 2년 평균을 모두 구합니다.
 def get_fx():
-    data = yf.Ticker("KRW=X").history(period="2y")
+    # 2년치(영업일 기준 약 504일)를 구하기 위해 넉넉히 3년 데이터를 가져옵니다.
+    data = yf.Ticker("KRW=X").history(period="3y") 
     current = round(data['Close'].iloc[-1], 2)
-    avg_1y = round(data['Close'][-252:].mean(), 2)
-    return current, avg_1y
+    avg_1y = round(data['Close'][-252:].mean(), 2)  # 1년(252영업일) 평균
+    avg_2y = round(data['Close'][-504:].mean(), 2)  # 2년(504영업일) 평균
+    return current, avg_1y, avg_2y
 
 # ==========================================
 # 3. 로직 및 판단 함수
@@ -82,6 +83,22 @@ def get_action_text(score):
     elif score >= 2: return 1, "🟡 시장 주의", "보유"
     else: return 0, "🔥 자동매수 유지", "보유"
 
+# 🔥 환율: 1년, 2년 복합 판단 로직 적용
+def get_fx_action(current, avg_1y, avg_2y):
+    diff_1y = (current - avg_1y) / avg_1y
+    diff_2y = (current - avg_2y) / avg_2y
+
+    if diff_1y >= 0.08 and diff_2y >= 0.10: 
+        return "🚨 절대 환전 금지 (초고환율)"
+    elif diff_1y <= -0.05 and diff_2y <= -0.05: 
+        return "💎 영끌 환전 (초강력 매수)"
+    elif diff_1y >= 0.04: 
+        return "⚠️ 환전 천천히"
+    elif diff_1y <= -0.05: 
+        return "✅ 적극 환전"
+    else: 
+        return "중립"
+
 def load_state():
     try:
         with open(STATE_FILE, "r") as f:
@@ -102,19 +119,15 @@ def send_telegram(msg):
 # ==========================================
 def main():
     try:
-        # 데이터 수집
         vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
-        usd, usd_avg = get_fx()
+        usd, usd_1y, usd_2y = get_fx() # 변수 3개로 받음
         
-        # 점수 계산 및 레벨 판단
         score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
         level, status, strategy = get_action_text(score)
         
-        # 환율 판단
-        fx_diff = (usd - usd_avg) / usd_avg
-        fx_action = "🚨 환전 금지" if fx_diff >= 0.08 else "⚠️ 천천히" if fx_diff >= 0.04 else "💎 적극 환전" if fx_diff <= -0.05 else "중립"
+        # 하이브리드 환율 판단 호출
+        fx_action = get_fx_action(usd, usd_1y, usd_2y)
 
-        # 상태 비교 (변화 시에만 알림)
         last_score = load_state()
         
         if last_score is None or score != last_score:
@@ -126,9 +139,11 @@ def main():
 👉 전략: {strategy}
 
 ━━━━━━━━━━
-💱 **환율**
-현재: {usd}원 (평균: {usd_avg}원)
-판단: {fx_action}
+💱 **환율 현황**
+• 현재가: {usd}원
+• 1년평균: {usd_1y}원
+• 2년평균: {usd_2y}원
+👉 **판단: {fx_action}**
 
 ━━━━━━━━━━
 📊 **시장 지표**
