@@ -1,9 +1,10 @@
-    import yfinance as yf
+import yfinance as yf
 import requests
 import os
+from datetime import datetime
 
 # ==========================================
-# 설정
+# 1. 설정 및 경로
 # ==========================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -12,19 +13,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE_DIR, "state.txt")
 
 # ==========================================
-# 안전 데이터 함수
+# 2. 데이터 수집 보조 함수
 # ==========================================
 def safe_get_price(ticker, period="5d"):
     try:
         data = yf.Ticker(ticker).history(period=period)
         if data.empty:
-            return None
+            return 0.0
         return round(data['Close'].iloc[-1], 2)
     except:
-        return None
+        return 0.0
 
 # ==========================================
-# 데이터 수집
+# 3. 데이터 수집 함수
 # ==========================================
 def get_market_status():
     vix_hist = yf.Ticker("^VIX").history(period="5d")
@@ -44,44 +45,21 @@ def get_market_status():
     gld = round(gld_hist['Close'].iloc[-1], 2)
     gld_ma50 = round(gld_hist['Close'].rolling(50).mean().iloc[-1], 2)
 
-    # RSI
     delta = spy_hist['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rsi = 100 - (100 / (1 + (gain / loss)))
 
-    # 낙폭
     recent_peak = spy_hist['Close'][-252:].max()
     dd = (spy - recent_peak) / recent_peak * 100
 
-    # 금리 (중립값)
-    tnx_raw = safe_get_price("^TNX")
-    tnx = tnx_raw if tnx_raw else 4.0
+    tnx = safe_get_price("^TNX")
+    dxy = safe_get_price("DX-Y.NYB")
+    if dxy == 0.0:
+        dxy = safe_get_price("DX=F")
 
-    # 달러 인덱스 (이중 방어)
-    dxy_raw = safe_get_price("DX-Y.NYB")
-    if not dxy_raw:
-        dxy_raw = safe_get_price("DX=F")
-    dxy = dxy_raw if dxy_raw else 100.0
+    return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
 
-    return (
-        vix,
-        vix_change,
-        spy,
-        ma200,
-        tnx,
-        qqq,
-        qqq_ma200,
-        gld,
-        gld_ma50,
-        round(rsi.iloc[-1], 1),
-        round(dd, 1),
-        dxy
-    )
-
-# ==========================================
-# 환율
-# ==========================================
 def get_fx():
     try:
         data = yf.Ticker("KRW=X").history(period="3y")
@@ -90,84 +68,47 @@ def get_fx():
         avg_2y = round(data['Close'][-504:].mean(), 2)
         return current, avg_1y, avg_2y
     except:
-        return None, None, None
+        return 0.0, 0.0, 0.0
 
+# ==========================================
+# 4. 로직 및 판단 함수
+# ==========================================
 def get_fx_action(current, avg_1y, avg_2y):
-    if current is None:
-        return "데이터 없음"
-
+    if current == 0.0: return "데이터 오류"
     diff_1y = (current - avg_1y) / avg_1y
     diff_2y = (current - avg_2y) / avg_2y
+    if diff_1y >= 0.08 and diff_2y >= 0.10: return "🚨 환전 금지"
+    elif diff_1y <= -0.05 and diff_2y <= -0.05: return "💎 적극 환전"
+    elif diff_1y >= 0.04: return "⚠️ 환전 천천히"
+    elif diff_1y <= -0.05: return "✅ 환전 기회"
+    else: return "중립"
 
-    if diff_1y >= 0.08 and diff_2y >= 0.10:
-        return "🚨 환전 금지"
-    elif diff_1y <= -0.05 and diff_2y <= -0.05:
-        return "💎 적극 환전"
-    elif diff_1y >= 0.04:
-        return "⚠️ 환전 천천히"
-    elif diff_1y <= -0.05:
-        return "✅ 환전 기회"
-    else:
-        return "중립"
-
-# ==========================================
-# 점수 계산
-# ==========================================
 def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma200, gld, gld_ma50):
     score = 0
-
-    if vix >= 40:
-        score += 3
-    elif vix >= 30:
-        score += 2
-    elif vix >= 20:
-        score += 1
-
-    if vix_change >= 0.1:
-        score += 2
-
-    if spy < ma200:
-        score += 2
-
-    if qqq < qqq_ma200:
-        score += 1
-
-    if rsi < 30:
-        score += 1
-    elif rsi > 70:
-        score -= 2
-
-    if dd <= -10:
-        score += 2
-
-    if tnx >= 4.5:
-        score += 2
-
-    if dxy >= 105:
-        score += 2
-
-    if gld > gld_ma50:
-        score += 1
-
+    if vix >= 40: score += 3
+    elif vix >= 30: score += 2
+    elif vix >= 20: score += 1
+    if vix_change >= 0.1: score += 2
+    if spy < ma200: score += 2
+    if qqq < qqq_ma200: score += 1
+    if rsi < 30: score += 1
+    elif rsi > 70: score -= 2
+    if dd <= -10: score += 2
+    if tnx >= 4.5: score += 2
+    if dxy >= 105: score += 2
+    if gld > gld_ma50: score += 1
     return int(round(score))
 
 def get_action(score):
-    if score >= 9:
-        return 4, "💎 공포", "매수 준비"
-    elif score >= 6:
-        return 3, "🛑 위험", "익절 확대"
-    elif score >= 4:
-        return 2, "⚠️ 경고", "익절 시작"
-    elif score >= 2:
-        return 1, "🟡 주의", "보유"
-    else:
-        return 0, "🔥 정상", "보유"
+    if score >= 9: return 4, "💎 공포", "매수 준비"
+    elif score >= 6: return 3, "🛑 위험", "익절 확대"
+    elif score >= 4: return 2, "⚠️ 경고", "익절 시작"
+    elif score >= 2: return 1, "🟡 주의", "보유"
+    else: return 0, "🔥 정상", "보유"
 
-# ==========================================
-# 상태 저장
-# ==========================================
 def load_state():
     try:
+        if not os.path.exists(STATE_FILE): return None
         with open(STATE_FILE, "r") as f:
             return int(float(f.read().strip()))
     except:
@@ -177,61 +118,51 @@ def save_state(score):
     with open(STATE_FILE, "w") as f:
         f.write(str(int(score)))
 
-# ==========================================
-# 텔레그램
-# ==========================================
-def send(msg):
+def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
 
 # ==========================================
-# 실행
+# 5. 실행부
 # ==========================================
 def main():
     try:
-        # 1. 데이터 가져오기
         vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
         usd, usd_1y, usd_2y = get_fx()
-
-        # 2. 점수 및 레벨 계산
+        
         score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
         level, status, strategy = get_action(score)
         fx_action = get_fx_action(usd, usd_1y, usd_2y)
 
-        # 3. 이전 상태 불러오기
         last_score = load_state()
 
-        # 🔥 첫 실행 무시 (Cron 대응: 파일이 초기화되는 특성 방어)
         if last_score is None:
             save_state(score)
-            print(f"최초 실행: 점수 {score} 저장 완료 (알림 미전송)")
+            print(f"초기 상태 저장 (점수: {score})")
             return
 
-        # 4. 패닉 감지 로직
         crash = (score - last_score >= 3)
         panic = (vix >= 45 or crash)
-        panic_text = "💀 **패닉 구간 감지 (급락 중)**\n" if panic else ""
+        panic_text = "💀 패닉 구간 감지!\n" if panic else ""
 
-        # 5. 점수가 변했을 때만 알림 전송
         if score != last_score:
-            # 표시용 데이터 정리 (N/A 대응)
-            tnx_display = f"{tnx}%" if tnx and tnx > 0 else "N/A"
-            dxy_display = dxy if dxy and dxy > 0 else "N/A"
+            tnx_display = f"{tnx}%" if tnx > 0 else "N/A"
+            dxy_display = dxy if dxy > 0 else "N/A"
 
             msg = f"""{panic_text}
-🤖 **투자 리포트**
+🤖 투자 리포트
 
-🔥 **단계 {level} | 점수 {score}**
+🔥 단계 {level} | 점수 {score}
 👉 상태: {status}
 👉 전략: {strategy}
 
 ━━━━━━━━━━
-💱 **환율 현황**
+💱 환율 현황
 현재: {usd}원 / 1Y평균: {usd_1y}원
 결과: {fx_action}
 
 ━━━━━━━━━━
-📊 **시장 지표**
+📊 시장 지표
 • VIX: {vix} ({vix_c*100:+.1f}%)
 • S&P500: {spy} (200MA: {spy_m})
 • 나스닥: {qqq} (200MA: {qqq_m})
@@ -239,15 +170,14 @@ def main():
 • 달러지수: {dxy_display}
 • RSI: {rsi} | 낙폭: {dd}%
 """
-            send(msg)
+            send_telegram(msg)
             save_state(score)
-            print(f"알림 전송 완료: {last_score} -> {score}")
+            print(f"알림 전송 완료 (점수: {score})")
         else:
-            print(f"변동 없음: 현재 점수 {score} (알림 미전송)")
+            print(f"변동 없음 (현재 점수: {score})")
 
     except Exception as e:
-        print(f"실행 중 오류 발생: {e}")
+        print(f"오류 발생: {e}")
 
-# 마지막 실행 줄
 if __name__ == "__main__":
     main()
