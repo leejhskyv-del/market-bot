@@ -12,22 +12,38 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE_DIR, "state.txt")
 
 # ==========================================
+# 안전 데이터 함수
+# ==========================================
+def safe_get_price(ticker, period="5d"):
+    try:
+        data = yf.Ticker(ticker).history(period=period)
+        if data.empty:
+            return None
+        return round(data['Close'].iloc[-1], 2)
+    except:
+        return None
+
+# ==========================================
 # 데이터 수집
 # ==========================================
 def get_market_status():
+    # VIX
     vix_hist = yf.Ticker("^VIX").history(period="5d")
     vix = round(vix_hist['Close'].iloc[-1], 2)
     prev_vix = round(vix_hist['Close'].iloc[-2], 2)
     vix_change = round((vix - prev_vix) / prev_vix, 3)
 
+    # SPY
     spy_hist = yf.Ticker("SPY").history(period="300d")
     spy = round(spy_hist['Close'].iloc[-1], 2)
     ma200 = round(spy_hist['Close'].rolling(200).mean().iloc[-1], 2)
 
+    # QQQ
     qqq_hist = yf.Ticker("QQQ").history(period="300d")
     qqq = round(qqq_hist['Close'].iloc[-1], 2)
     qqq_ma200 = round(qqq_hist['Close'].rolling(200).mean().iloc[-1], 2)
 
+    # GOLD
     gld_hist = yf.Ticker("GLD").history(period="100d")
     gld = round(gld_hist['Close'].iloc[-1], 2)
     gld_ma50 = round(gld_hist['Close'].rolling(50).mean().iloc[-1], 2)
@@ -42,26 +58,48 @@ def get_market_status():
     recent_peak = spy_hist['Close'][-252:].max()
     dd = (spy - recent_peak) / recent_peak * 100
 
-    tnx = round(yf.Ticker("^TNX").history(period="5d")['Close'].iloc[-1], 2)
+    # 🔥 금리 (중립값 처리)
+    tnx_raw = safe_get_price("^TNX")
+    tnx = tnx_raw if tnx_raw else 4.0
 
-    try:
-        dxy = round(yf.Ticker("DX=F").history(period="5d")['Close'].iloc[-1], 2)
-    except:
-        dxy = 100.0
+    # 🔥 DXY (이중 방어 + 중립값)
+    dxy_raw = safe_get_price("DX-Y.NYB")
+    if not dxy_raw:
+        dxy_raw = safe_get_price("DX=F")
+    dxy = dxy_raw if dxy_raw else 100.0
 
-    return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
+    return (
+        vix,
+        vix_change,
+        spy,
+        ma200,
+        tnx,
+        qqq,
+        qqq_ma200,
+        gld,
+        gld_ma50,
+        round(rsi.iloc[-1], 1),
+        round(dd, 1),
+        dxy
+    )
 
 # ==========================================
 # 환율
 # ==========================================
 def get_fx():
-    data = yf.Ticker("KRW=X").history(period="3y")
-    current = round(data['Close'].iloc[-1], 2)
-    avg_1y = round(data['Close'][-252:].mean(), 2)
-    avg_2y = round(data['Close'][-504:].mean(), 2)
-    return current, avg_1y, avg_2y
+    try:
+        data = yf.Ticker("KRW=X").history(period="3y")
+        current = round(data['Close'].iloc[-1], 2)
+        avg_1y = round(data['Close'][-252:].mean(), 2)
+        avg_2y = round(data['Close'][-504:].mean(), 2)
+        return current, avg_1y, avg_2y
+    except:
+        return None, None, None
 
 def get_fx_action(current, avg_1y, avg_2y):
+    if current is None:
+        return "데이터 없음"
+
     diff_1y = (current - avg_1y) / avg_1y
     diff_2y = (current - avg_2y) / avg_2y
 
@@ -99,7 +137,7 @@ def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma2
     if dxy >= 105: score += 2
     if gld > gld_ma50: score += 1
 
-    return int(round(score))  # 🔥 핵심: 정수화
+    return int(round(score))
 
 def get_action(score):
     if score >= 9: return 4, "💎 공포", "매수 준비"
@@ -109,7 +147,7 @@ def get_action(score):
     else: return 0, "🔥 정상", "보유"
 
 # ==========================================
-# 상태 저장 (🔥 핵심 수정)
+# 상태 저장
 # ==========================================
 def load_state():
     try:
@@ -143,13 +181,22 @@ def main():
 
     last_score = load_state()
 
+    # 🔥 Cron 대응 (첫 실행 무시)
+    if last_score is None:
+        save_state(score)
+        return
+
     # 🔥 패닉 감지
-    crash = (last_score is not None and score - last_score >= 3)
+    crash = (score - last_score >= 3)
     panic = (vix >= 45 or crash)
 
-    if last_score is None or score != last_score:
+    if score != last_score:
 
         panic_text = "💀 패닉 감지\n" if panic else ""
+
+        # 표시용 값 (N/A 처리)
+        tnx_display = tnx if tnx != 4.0 else "N/A"
+        dxy_display = dxy if dxy != 100.0 else "N/A"
 
         msg = f"""
 {panic_text}
@@ -168,7 +215,7 @@ VIX {vix} ({vix_c*100:+.1f}%)
 SPY {spy} / 200MA {spy_m}
 QQQ {qqq} / 200MA {qqq_m}
 금 {gld}
-금리 {tnx} | 달러 {dxy}
+금리 {tnx_display}% | 달러 {dxy_display}
 RSI {rsi} | 낙폭 {dd}%
 """
 
