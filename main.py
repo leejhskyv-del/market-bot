@@ -1,10 +1,9 @@
 import yfinance as yf
 import requests
 import os
-from datetime import datetime
 
 # ==========================================
-# 1. 설정 및 경로
+# 설정
 # ==========================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -13,7 +12,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE_DIR, "state.txt")
 
 # ==========================================
-# 2. 데이터 수집 보조 함수
+# 안전 데이터
 # ==========================================
 def safe_get_price(ticker, period="5d"):
     try:
@@ -25,7 +24,7 @@ def safe_get_price(ticker, period="5d"):
         return 0.0
 
 # ==========================================
-# 3. 데이터 수집 함수
+# 시장 데이터
 # ==========================================
 def get_market_status():
     vix_hist = yf.Ticker("^VIX").history(period="5d")
@@ -54,12 +53,16 @@ def get_market_status():
     dd = (spy - recent_peak) / recent_peak * 100
 
     tnx = safe_get_price("^TNX")
+
     dxy = safe_get_price("DX-Y.NYB")
     if dxy == 0.0:
         dxy = safe_get_price("DX=F")
 
     return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
 
+# ==========================================
+# 환율
+# ==========================================
 def get_fx():
     try:
         data = yf.Ticker("KRW=X").history(period="3y")
@@ -70,45 +73,84 @@ def get_fx():
     except:
         return 0.0, 0.0, 0.0
 
-# ==========================================
-# 4. 로직 및 판단 함수
-# ==========================================
 def get_fx_action(current, avg_1y, avg_2y):
-    if current == 0.0: return "데이터 오류"
+    if current == 0.0:
+        return "데이터 오류"
+
     diff_1y = (current - avg_1y) / avg_1y
     diff_2y = (current - avg_2y) / avg_2y
-    if diff_1y >= 0.08 and diff_2y >= 0.10: return "🚨 환전 금지"
-    elif diff_1y <= -0.05 and diff_2y <= -0.05: return "💎 적극 환전"
-    elif diff_1y >= 0.04: return "⚠️ 환전 천천히"
-    elif diff_1y <= -0.05: return "✅ 환전 기회"
-    else: return "중립"
 
+    if diff_1y >= 0.08 and diff_2y >= 0.10:
+        return "🚨 환전 금지"
+    elif diff_1y <= -0.05 and diff_2y <= -0.05:
+        return "💎 적극 환전"
+    elif diff_1y >= 0.04:
+        return "⚠️ 환전 천천히"
+    elif diff_1y <= -0.05:
+        return "✅ 환전 기회"
+    else:
+        return "중립"
+
+# ==========================================
+# 점수 계산
+# ==========================================
 def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma200, gld, gld_ma50):
     score = 0
-    if vix >= 40: score += 3
-    elif vix >= 30: score += 2
-    elif vix >= 20: score += 1
-    if vix_change >= 0.1: score += 2
-    if spy < ma200: score += 2
-    if qqq < qqq_ma200: score += 1
-    if rsi < 30: score += 1
-    elif rsi > 70: score -= 2
-    if dd <= -10: score += 2
-    if tnx >= 4.5: score += 2
-    if dxy >= 105: score += 2
-    if gld > gld_ma50: score += 1
+
+    if vix >= 40:
+        score += 3
+    elif vix >= 30:
+        score += 2
+    elif vix >= 20:
+        score += 1
+
+    if vix_change >= 0.1:
+        score += 2
+
+    if spy < ma200:
+        score += 2
+
+    if qqq < qqq_ma200:
+        score += 1
+
+    if rsi < 30:
+        score += 1
+    elif rsi > 70:
+        score -= 2
+
+    if dd <= -10:
+        score += 2
+
+    if tnx >= 4.5:
+        score += 2
+
+    if dxy >= 105:
+        score += 2
+
+    if gld > gld_ma50:
+        score += 1
+
     return int(round(score))
 
 def get_action(score):
-    if score >= 9: return 4, "💎 공포", "매수 준비"
-    elif score >= 6: return 3, "🛑 위험", "익절 확대"
-    elif score >= 4: return 2, "⚠️ 경고", "익절 시작"
-    elif score >= 2: return 1, "🟡 주의", "보유"
-    else: return 0, "🔥 정상", "보유"
+    if score >= 9:
+        return 4, "💎 공포", "매수 준비"
+    elif score >= 6:
+        return 3, "🛑 위험", "익절 확대"
+    elif score >= 4:
+        return 2, "⚠️ 경고", "익절 시작"
+    elif score >= 2:
+        return 1, "🟡 주의", "보유"
+    else:
+        return 0, "🔥 정상", "보유"
 
+# ==========================================
+# 상태 저장
+# ==========================================
 def load_state():
     try:
-        if not os.path.exists(STATE_FILE): return None
+        if not os.path.exists(STATE_FILE):
+            return None
         with open(STATE_FILE, "r") as f:
             return int(float(f.read().strip()))
     except:
@@ -118,34 +160,35 @@ def save_state(score):
     with open(STATE_FILE, "w") as f:
         f.write(str(int(score)))
 
-def send_telegram(msg):
+# ==========================================
+# 텔레그램
+# ==========================================
+def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
 
 # ==========================================
-# 5. 실행부
+# 실행
 # ==========================================
 def main():
     try:
         vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
         usd, usd_1y, usd_2y = get_fx()
-        
+
         score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
         level, status, strategy = get_action(score)
         fx_action = get_fx_action(usd, usd_1y, usd_2y)
 
         last_score = load_state()
 
-        if last_score is None:
-            save_state(score)
-            print(f"초기 상태 저장 (점수: {score})")
-            return
+        # 🔥 Cron 환경 대응: 항상 1회 전송
+        should_send = (last_score is None or score != last_score)
 
-        crash = (score - last_score >= 3)
+        crash = (last_score is not None and score - last_score >= 3)
         panic = (vix >= 45 or crash)
         panic_text = "💀 패닉 구간 감지!\n" if panic else ""
 
-        if score != last_score:
+        if should_send:
             tnx_display = f"{tnx}%" if tnx > 0 else "N/A"
             dxy_display = dxy if dxy > 0 else "N/A"
 
@@ -157,24 +200,25 @@ def main():
 👉 전략: {strategy}
 
 ━━━━━━━━━━
-💱 환율 현황
-현재: {usd}원 / 1Y평균: {usd_1y}원
-결과: {fx_action}
+💱 환율
+현재: {usd}원 / 1Y: {usd_1y}원
+👉 {fx_action}
 
 ━━━━━━━━━━
-📊 시장 지표
+📊 시장
 • VIX: {vix} ({vix_c*100:+.1f}%)
-• S&P500: {spy} (200MA: {spy_m})
-• 나스닥: {qqq} (200MA: {qqq_m})
+• SPY: {spy} / 200MA {spy_m}
+• QQQ: {qqq} / 200MA {qqq_m}
 • 금: {gld} | 금리: {tnx_display}
 • 달러지수: {dxy_display}
 • RSI: {rsi} | 낙폭: {dd}%
 """
-            send_telegram(msg)
+
+            send(msg)
             save_state(score)
             print(f"알림 전송 완료 (점수: {score})")
         else:
-            print(f"변동 없음 (현재 점수: {score})")
+            print(f"변동 없음 (점수: {score})")
 
     except Exception as e:
         print(f"오류 발생: {e}")
