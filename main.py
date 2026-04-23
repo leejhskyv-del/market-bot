@@ -198,25 +198,38 @@ def main():
         tnx_display = tnx if tnx != 4.0 else "N/A"
         dxy_display = dxy if dxy != 100.0 else "N/A"
 
-        msg = f"""
-{panic_text}
-🤖 투자 리포트
+       msg = f"""
+{panic_text}🤖 투자 리포트
 
-단계 {level} | 점수 {score}
-상태: {status}
-전략: {strategy}
+━━━━━━━━━━━━━━━━━━
+🔥 단계 {level} | 점수 {score}
+📍 상태: {status}
+🎯 전략: {strategy}
 
-[환율]
-현재: {usd} / 1Y: {usd_1y} / 2Y: {usd_2y}
-→ {fx_action}
+━━━━━━━━━━━━━━━━━━
+💱 환율
+💲 현재: {usd}
+📊 1Y: {usd_1y} | 2Y: {usd_2y}
+👉 {fx_action}
 
-[시장]
-VIX {vix} ({vix_c*100:+.1f}%)
-SPY {spy} / 200MA {spy_m}
-QQQ {qqq} / 200MA {qqq_m}
-금 {gld}
-금리 {tnx_display}% | 달러 {dxy_display}
-RSI {rsi} | 낙폭 {dd}%
+━━━━━━━━━━━━━━━━━━
+📊 시장 핵심
+📉 VIX: {vix} ({vix_c*100:+.1f}%)
+📈 SPY: {spy} / 200MA {spy_m}
+🚀 QQQ: {qqq} / 200MA {qqq_m}
+
+━━━━━━━━━━━━━━━━━━
+🧠 리스크 분석
+💰 금리: {tnx_display}%
+💵 달러: {dxy_display}
+🥇 금: {gld}
+
+━━━━━━━━━━━━━━━━━━
+⏱ 타이밍
+🔥 RSI: {rsi}
+📉 낙폭: {dd}%
+
+━━━━━━━━━━━━━━━━━━
 """
 
         send(msg)
