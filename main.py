@@ -212,7 +212,7 @@ def main():
             msg = f"""{panic_text}
 🤖 투자 리포트
 
-{status} 단계 {level}
+{status} 단계 {level} | 점수 {score}
 👉 전략: {strategy}
 
 ━━━━━━━━━━
