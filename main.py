@@ -23,6 +23,40 @@ def safe_get_price(ticker, period="5d"):
     except:
         return 0.0
 
+def get_avg(ticker, period="1y"):
+    try:
+        data = yf.Ticker(ticker).history(period=period)
+        if data.empty:
+            return 0.0
+        return data['Close'].mean()
+    except:
+        return 0.0
+
+# ==========================================
+# 신호등
+# ==========================================
+def signal_vix(vix):
+    return "🟢" if vix < 20 else "🟡" if vix < 30 else "🔴"
+
+def signal_trend(price, ma):
+    return "🟢" if price > ma else "🟡" if price > ma * 0.97 else "🔴"
+
+def signal_rsi(rsi):
+    return "🟢" if 30 <= rsi <= 70 else "🔴" if rsi > 70 else "🟡"
+
+def signal_dd(dd):
+    return "🟢" if dd > -5 else "🟡" if dd > -10 else "🔴"
+
+def signal_tnx(tnx, avg):
+    if avg == 0:
+        return "🟡"
+    return "🟢" if tnx < avg * 0.9 else "🟡" if tnx < avg * 1.1 else "🔴"
+
+def signal_dxy(dxy, avg):
+    if avg == 0:
+        return "🟡"
+    return "🟢" if dxy < avg * 0.95 else "🟡" if dxy < avg * 1.05 else "🔴"
+
 # ==========================================
 # 시장 데이터
 # ==========================================
@@ -89,47 +123,25 @@ def get_fx_action(current, avg_1y, avg_2y):
     elif diff_1y <= -0.05:
         return "✅ 환전 기회"
     else:
-        return "중립"
+        return "🟡 중립"
 
 # ==========================================
-# 점수 계산
+# 점수
 # ==========================================
 def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma200, gld, gld_ma50):
     score = 0
-
-    if vix >= 40:
-        score += 3
-    elif vix >= 30:
-        score += 2
-    elif vix >= 20:
-        score += 1
-
-    if vix_change >= 0.1:
-        score += 2
-
-    if spy < ma200:
-        score += 2
-
-    if qqq < qqq_ma200:
-        score += 1
-
-    if rsi < 30:
-        score += 1
-    elif rsi > 70:
-        score -= 2
-
-    if dd <= -10:
-        score += 2
-
-    if tnx >= 4.5:
-        score += 2
-
-    if dxy >= 105:
-        score += 2
-
-    if gld > gld_ma50:
-        score += 1
-
+    if vix >= 40: score += 3
+    elif vix >= 30: score += 2
+    elif vix >= 20: score += 1
+    if vix_change >= 0.1: score += 2
+    if spy < ma200: score += 2
+    if qqq < qqq_ma200: score += 1
+    if rsi < 30: score += 1
+    elif rsi > 70: score -= 2
+    if dd <= -10: score += 2
+    if tnx >= 4.5: score += 2
+    if dxy >= 105: score += 2
+    if gld > gld_ma50: score += 1
     return int(round(score))
 
 def get_action(score):
@@ -172,21 +184,26 @@ def send(msg):
 # ==========================================
 def main():
     try:
+        # 데이터
         vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
         usd, usd_1y, usd_2y = get_fx()
 
+        # 평균 (🔥 1회만 계산)
+        tnx_avg = get_avg("^TNX")
+        dxy_avg = get_avg("DX-Y.NYB")
+
+        # 판단
         score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
         level, status, strategy = get_action(score)
         fx_action = get_fx_action(usd, usd_1y, usd_2y)
 
+        # 상태 비교
         last_score = load_state()
-
-        # 🔥 Cron 환경 대응: 항상 1회 전송
         should_send = (last_score is None or score != last_score)
 
         crash = (last_score is not None and score - last_score >= 3)
         panic = (vix >= 45 or crash)
-        panic_text = "💀 패닉 구간 감지!\n" if panic else ""
+        panic_text = "💀 패닉 감지!\n" if panic else ""
 
         if should_send:
             tnx_display = f"{tnx}%" if tnx > 0 else "N/A"
@@ -195,34 +212,37 @@ def main():
             msg = f"""{panic_text}
 🤖 투자 리포트
 
-🔥 단계 {level} | 점수 {score}
-👉 상태: {status}
+{status} 단계 {level}
 👉 전략: {strategy}
 
 ━━━━━━━━━━
 💱 환율
 현재: {usd}원
-1Y: {usd_1y}원 / 2Y: {usd_2y}원
+1Y: {usd_1y} | 2Y: {usd_2y}
 👉 {fx_action}
 
 ━━━━━━━━━━
-📊 시장
-• VIX: {vix} ({vix_c*100:+.1f}%)
-• SPY: {spy} / 200MA {spy_m}
-• QQQ: {qqq} / 200MA {qqq_m}
-• 금: {gld} | 금리: {tnx_display}
-• 달러지수: {dxy_display}
-• RSI: {rsi} | 낙폭: {dd}%
+📊 시장 상태
+
+{signal_vix(vix)} VIX        {vix:<6} ({vix_c*100:+.1f}%)
+{signal_trend(spy, spy_m)} SPY        {spy:<6} / {spy_m}
+{signal_trend(qqq, qqq_m)} QQQ        {qqq:<6} / {qqq_m}
+
+{signal_tnx(tnx, tnx_avg)} 금리       {tnx_display}
+{signal_dxy(dxy, dxy_avg)} 달러지수   {dxy_display}
+{signal_rsi(rsi)} RSI        {rsi}
+{signal_dd(dd)} 낙폭        {dd}%
 """
 
             send(msg)
             save_state(score)
-            print(f"알림 전송 완료 (점수: {score})")
+            print("알림 전송 완료")
+
         else:
-            print(f"변동 없음 (점수: {score})")
+            print("변동 없음")
 
     except Exception as e:
-        print(f"오류 발생: {e}")
+        print("에러:", e)
 
 if __name__ == "__main__":
     main()
