@@ -188,65 +188,66 @@ def send(msg):
 # 실행
 # ==========================================
 def main():
-    vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
-    usd, usd_1y, usd_2y = get_fx()
+    try:
+        # 1. 데이터 가져오기
+        vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
+        usd, usd_1y, usd_2y = get_fx()
 
-    score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
-    level, status, strategy = get_action(score)
+        # 2. 점수 및 레벨 계산
+        score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
+        level, status, strategy = get_action(score)
+        fx_action = get_fx_action(usd, usd_1y, usd_2y)
 
-    fx_action = get_fx_action(usd, usd_1y, usd_2y)
-    last_score = load_state()
+        # 3. 이전 상태 불러오기
+        last_score = load_state()
 
-    # 첫 실행 무시
-    if last_score is None:
-        save_state(score)
-        return
+        # 🔥 첫 실행 무시 (Cron 대응: 파일이 초기화되는 특성 방어)
+        if last_score is None:
+            save_state(score)
+            print(f"최초 실행: 점수 {score} 저장 완료 (알림 미전송)")
+            return
 
-    # 패닉 감지
-    crash = (score - last_score >= 3)
-    panic = (vix >= 45 or crash)
+        # 4. 패닉 감지 로직
+        crash = (score - last_score >= 3)
+        panic = (vix >= 45 or crash)
+        panic_text = "💀 **패닉 구간 감지 (급락 중)**\n" if panic else ""
 
-    if score != last_score:
-        panic_text = "💀 패닉 감지\n" if panic else ""
+        # 5. 점수가 변했을 때만 알림 전송
+        if score != last_score:
+            # 표시용 데이터 정리 (N/A 대응)
+            tnx_display = f"{tnx}%" if tnx and tnx > 0 else "N/A"
+            dxy_display = dxy if dxy and dxy > 0 else "N/A"
 
-        tnx_display = tnx if tnx != 4.0 else "N/A"
-        dxy_display = dxy if dxy != 100.0 else "N/A"
+            msg = f"""{panic_text}
+🤖 **투자 리포트**
 
-        msg = f"""
-{panic_text}🤖 투자 리포트
+🔥 **단계 {level} | 점수 {score}**
+👉 상태: {status}
+👉 전략: {strategy}
 
-━━━━━━━━━━━━━━━━━━
-🔥 단계 {level} | 점수 {score}
-📍 상태: {status}
-🎯 전략: {strategy}
+━━━━━━━━━━
+💱 **환율 현황**
+현재: {usd}원 / 1Y평균: {usd_1y}원
+결과: {fx_action}
 
-━━━━━━━━━━━━━━━━━━
-💱 환율
-현재: {usd}
-1Y: {usd_1y} | 2Y: {usd_2y}
-👉 {fx_action}
-
-━━━━━━━━━━━━━━━━━━
-📊 시장
-VIX: {vix} ({vix_c*100:+.1f}%)
-SPY: {spy} / 200MA {spy_m}
-QQQ: {qqq} / 200MA {qqq_m}
-
-━━━━━━━━━━━━━━━━━━
-🧠 리스크
-금리: {tnx_display}%
-달러: {dxy_display}
-금: {gld}
-
-━━━━━━━━━━━━━━━━━━
-⏱ 타이밍
-RSI: {rsi}
-낙폭: {dd}%
-━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━
+📊 **시장 지표**
+• VIX: {vix} ({vix_c*100:+.1f}%)
+• S&P500: {spy} (200MA: {spy_m})
+• 나스닥: {qqq} (200MA: {qqq_m})
+• 금: {gld} | 금리: {tnx_display}
+• 달러지수: {dxy_display}
+• RSI: {rsi} | 낙폭: {dd}%
 """
+            send(msg)
+            save_state(score)
+            print(f"알림 전송 완료: {last_score} -> {score}")
+        else:
+            print(f"변동 없음: 현재 점수 {score} (알림 미전송)")
 
-        send(msg)
-        save_state(score)
+    except Exception as e:
+        print(f"실행 중 오류 발생: {e}")
 
+# 마지막 실행 줄
 if __name__ == "__main__":
     main()
