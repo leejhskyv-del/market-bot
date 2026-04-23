@@ -134,15 +134,15 @@ def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma2
 
 def get_action(score):
     if score >= 9:
-        return 4, "💎 공포", "매수 준비"
+        return 4, "🚨 공포", "매수 준비"
     elif score >= 6:
-        return 3, "🛑 위험", "익절 확대"
+        return 3, "🔴 위험", "익절 확대"
     elif score >= 4:
-        return 2, "⚠️ 경고", "익절 시작"
+        return 2, "🟠 경고", "익절 시작"
     elif score >= 2:
         return 1, "🟡 주의", "보유"
     else:
-        return 0, "🔥 정상", "보유"
+        return 0, "🟢 정상", "보유"
 
 # ==========================================
 # 상태 저장
