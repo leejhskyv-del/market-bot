@@ -1,248 +1,216 @@
 import yfinance as yf
 import requests
 import os
+import json
+import feedparser
+from openai import OpenAI
 
 # ==========================================
-# 설정
+# 1. 설정 및 환경 변수
 # ==========================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.path.join(BASE_DIR, "state.txt")
+STATE_FILE = os.path.join(BASE_DIR, "state.json")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ==========================================
-# 안전 데이터
+# 2. 다중 뉴스 소스 수집
 # ==========================================
-def safe_get_price(ticker, period="5d"):
+def fetch_global_news():
+    urls = [
+        "https://finance.yahoo.com/news/rssindex",
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?id=10000664",
+        "https://www.investing.com/rss/news_285.rss"
+    ]
+    headlines = []
+    for url in urls:
+        try:
+            feed = feedparser.parse(url)
+            headlines.extend([entry.title for entry in feed.entries[:4]])
+        except: continue
+    return "\n".join(headlines)
+
+# ==========================================
+# 3. GPT-4o 매크로 분석
+# ==========================================
+def get_ai_macro_score(news_text):
+    if not news_text: return 0, "뉴스 수집 실패", "None"
+    
+    prompt = f"""
+    Analyze macro risk based on 5 categories: 
+    1.War/Geopolitics 2.Pandemic 3.Financial System 4.Rates/CPI 5.Liquidity.
+    Scoring: +3(Confirmed Black Swan), +2(Major Negative), +1(Minor Negative), 0(Neutral), -1(Minor Positive), -2(Strong Positive).
+    News: {news_text}
+    Output STRICTLY in JSON: {{"score": int, "reason": "1-sentence", "category": "name"}}
+    """
     try:
-        data = yf.Ticker(ticker).history(period=period)
-        if data.empty:
-            return 0.0
-        return round(data['Close'].iloc[-1], 2)
-    except:
-        return 0.0
-
-def get_avg(ticker, period="1y"):
-    try:
-        data = yf.Ticker(ticker).history(period=period)
-        if data.empty:
-            return 0.0
-        return data['Close'].mean()
-    except:
-        return 0.0
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        res = json.loads(response.choices[0].message.content)
+        return res.get('score', 0), res.get('reason', '분석 불가')
+    except: return 0, "AI 에러"
 
 # ==========================================
-# 신호등
-# ==========================================
-def signal_vix(vix):
-    return "🟢" if vix < 20 else "🟡" if vix < 30 else "🔴"
-
-def signal_trend(price, ma):
-    return "🟢" if price > ma else "🟡" if price > ma * 0.97 else "🔴"
-
-def signal_rsi(rsi):
-    return "🟢" if 30 <= rsi <= 70 else "🔴" if rsi > 70 else "🟡"
-
-def signal_dd(dd):
-    return "🟢" if dd > -5 else "🟡" if dd > -10 else "🔴"
-
-def signal_tnx(tnx, avg):
-    if avg == 0:
-        return "🟡"
-    return "🟢" if tnx < avg * 0.9 else "🟡" if tnx < avg * 1.1 else "🔴"
-
-def signal_dxy(dxy, avg):
-    if avg == 0:
-        return "🟡"
-    return "🟢" if dxy < avg * 0.95 else "🟡" if dxy < avg * 1.05 else "🔴"
-
-# ==========================================
-# 시장 데이터
+# 4. 시장 지표 수집 (5일 수익률 추가)
 # ==========================================
 def get_market_status():
-    vix_hist = yf.Ticker("^VIX").history(period="5d")
-    vix = round(vix_hist['Close'].iloc[-1], 2)
-    prev_vix = round(vix_hist['Close'].iloc[-2], 2)
-    vix_change = round((vix - prev_vix) / prev_vix, 3)
-
+    vix_data = yf.Ticker("^VIX").history(period="5d")
+    vix = round(vix_data['Close'].iloc[-1], 2)
+    
     spy_hist = yf.Ticker("SPY").history(period="300d")
     spy = round(spy_hist['Close'].iloc[-1], 2)
     ma200 = round(spy_hist['Close'].rolling(200).mean().iloc[-1], 2)
-
-    qqq_hist = yf.Ticker("QQQ").history(period="300d")
-    qqq = round(qqq_hist['Close'].iloc[-1], 2)
-    qqq_ma200 = round(qqq_hist['Close'].rolling(200).mean().iloc[-1], 2)
-
-    gld_hist = yf.Ticker("GLD").history(period="100d")
-    gld = round(gld_hist['Close'].iloc[-1], 2)
-    gld_ma50 = round(gld_hist['Close'].rolling(50).mean().iloc[-1], 2)
-
+    
+    # 최근 5일 수익률 (메타 필터용)
+    spy_5d_ago = spy_hist['Close'].iloc[-6] if len(spy_hist) >= 6 else spy_hist['Close'].iloc[0]
+    spy_return_5d = round((spy - spy_5d_ago) / spy_5d_ago * 100, 2)
+    
     delta = spy_hist['Close'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rsi = 100 - (100 / (1 + (gain / loss)))
-
+    rsi = round(100 - (100 / (1 + (gain / loss))).iloc[-1], 1)
+    
     recent_peak = spy_hist['Close'][-252:].max()
-    dd = (spy - recent_peak) / recent_peak * 100
+    dd = round((spy - recent_peak) / recent_peak * 100, 1)
 
-    tnx = safe_get_price("^TNX")
+    tnx_data = yf.Ticker("^TNX").history(period="1y")
+    tnx = round(tnx_data['Close'].iloc[-1], 2)
+    tnx_avg = round(tnx_data['Close'].mean(), 2)
 
-    dxy = safe_get_price("DX-Y.NYB")
-    if dxy == 0.0:
-        dxy = safe_get_price("DX=F")
-
-    return vix, vix_change, spy, ma200, tnx, qqq, qqq_ma200, gld, gld_ma50, round(rsi.iloc[-1], 1), round(dd, 1), dxy
+    return vix, spy, ma200, spy_return_5d, rsi, dd, tnx, tnx_avg
 
 # ==========================================
-# 환율
+# 5. 베이스 점수 계산 (퀀트 + AI)
 # ==========================================
-def get_fx():
-    try:
-        data = yf.Ticker("KRW=X").history(period="3y")
-        current = round(data['Close'].iloc[-1], 2)
-        avg_1y = round(data['Close'][-252:].mean(), 2)
-        avg_2y = round(data['Close'][-504:].mean(), 2)
-        return current, avg_1y, avg_2y
-    except:
-        return 0.0, 0.0, 0.0
+def calculate_base_scores(vix, spy, ma200, rsi, dd, tnx, tnx_avg, ai_score):
+    quant_score = 0
+    if vix >= 30: quant_score += 2
+    elif vix >= 20: quant_score += 1
+    
+    if spy < ma200: quant_score += 2
+    if dd <= -5: quant_score += 1   # 느린 하락 방어
+    if dd <= -10: quant_score += 1  # 총 -10%시 2점
+    
+    if rsi < 30: quant_score += 1
+    elif rsi > 75 and spy < (ma200 * 1.05): quant_score -= 2
+    
+    if tnx > (tnx_avg * 1.1): quant_score += 2
 
-def get_fx_action(current, avg_1y, avg_2y):
-    if current == 0.0:
-        return "데이터 오류"
+    # AI 1차 필터링
+    if abs(ai_score) == 2: ai_score = int(round(ai_score * 0.7))
+    
+    # 퀀트가 이미 패닉(8 이상)이면 AI 노이즈 억제 (과열 방지 밸브)
+    if quant_score >= 8: ai_score = min(ai_score, 1)
 
-    diff_1y = (current - avg_1y) / avg_1y
-    diff_2y = (current - avg_2y) / avg_2y
-
-    if diff_1y >= 0.08 and diff_2y >= 0.10:
-        return "🚨 환전 금지"
-    elif diff_1y <= -0.05 and diff_2y <= -0.05:
-        return "💎 적극 환전"
-    elif diff_1y >= 0.04:
-        return "⚠️ 환전 천천히"
-    elif diff_1y <= -0.05:
-        return "✅ 환전 기회"
-    else:
-        return "🟡 중립"
+    return quant_score, ai_score
 
 # ==========================================
-# 점수
+# 6. ⭐ 메타 필터 (시스템 감시자) ⭐
 # ==========================================
-def calculate_score(vix, vix_change, spy, ma200, rsi, dd, tnx, dxy, qqq, qqq_ma200, gld, gld_ma50):
-    score = 0
-    if vix >= 40: score += 3
-    elif vix >= 30: score += 2
-    elif vix >= 20: score += 1
-    if vix_change >= 0.1: score += 2
-    if spy < ma200: score += 2
-    if qqq < qqq_ma200: score += 1
-    if rsi < 30: score += 1
-    elif rsi > 70: score -= 2
-    if dd <= -10: score += 2
-    if tnx >= 4.5: score += 2
-    if dxy >= 105: score += 2
-    if gld > gld_ma50: score += 1
-    return int(round(score))
+def apply_meta_filter(quant_score, ai_score, vix, spy_return_5d):
+    meta_alerts = []
+    
+    # 룰 1: AI 환각 감지 (뉴스는 난리인데 시장은 평온)
+    if ai_score >= 2 and vix < 20:
+        ai_score = 0
+        meta_alerts.append("🚫 [메타 제어] VIX 평온. AI 과잉 경고(환각) 차단.")
+        
+    # 룰 2: 과도한 공포 억제 (점수는 높은데 시장은 오르는 중)
+    if quant_score >= 6 and spy_return_5d > 0:
+        quant_score -= 1
+        meta_alerts.append("📉 [메타 제어] SPY 단기 상승 중. 과도한 공포 점수 1점 하향.")
+        
+    # 룰 3: 시스템 맹점 방어 (점수는 낮고 조용한데 시장은 계속 녹아내림)
+    if (quant_score + ai_score) <= 2 and spy_return_5d <= -3.0:
+        quant_score += 2
+        meta_alerts.append("⚠️ [메타 제어] 지표 맹점 감지! 숨은 하락 추세로 인해 2점 강제 상향.")
 
+    return quant_score, ai_score, meta_alerts
+
+# ==========================================
+# 7. 행동 지침 & 메인 실행
+# ==========================================
 def get_action(score):
-    if score >= 9:
-        return 4, "🚨 공포", "매수 준비"
-    elif score >= 6:
-        return 3, "🔴 위험", "익절 확대"
-    elif score >= 4:
-        return 2, "🟠 경고", "익절 시작"
-    elif score >= 2:
-        return 1, "🟡 주의", "보유"
-    else:
-        return 0, "🟢 정상", "보유"
+    if score <= -2: return "💎 과열", "추격 매수 금지 / 상승장 즐기기"
+    elif score >= 9: return "🚨 패닉", "현금 실탄 투입 (분할 매수)"
+    elif score >= 6: return "🔴 위험", "주식 추가 익절 (현금 확보 확대)"
+    elif score >= 4: return "🟠 경고", "주식 1차 익절 (리스크 관리)"
+    elif score >= 2: return "🟡 주의", "신규 매수 보류 / 관망"
+    else: return "🟢 정상", "유지 / 기존 자동매수 진행"
 
-# ==========================================
-# 상태 저장
-# ==========================================
-def load_state():
-    try:
-        if not os.path.exists(STATE_FILE):
-            return None
-        with open(STATE_FILE, "r") as f:
-            return int(float(f.read().strip()))
-    except:
-        return None
-
-def save_state(score):
-    with open(STATE_FILE, "w") as f:
-        f.write(str(int(score)))
-
-# ==========================================
-# 텔레그램
-# ==========================================
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
+    requests.get(url, params={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
-# ==========================================
-# 실행
-# ==========================================
 def main():
     try:
-        # 데이터
-        vix, vix_c, spy, spy_m, tnx, qqq, qqq_m, gld, gld_m, rsi, dd, dxy = get_market_status()
-        usd, usd_1y, usd_2y = get_fx()
+        # 상태 로드
+        state = {"last_score": 0}
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f: state = json.load(f)
 
-        # 평균 (🔥 1회만 계산)
-        tnx_avg = get_avg("^TNX")
-        dxy_avg = get_avg("DX-Y.NYB")
+        # 1. 데이터 수집
+        vix, spy, ma200, spy_return_5d, rsi, dd, tnx, tnx_avg = get_market_status()
+        news_text = fetch_global_news()
+        raw_ai_score, ai_reason = get_ai_macro_score(news_text)
+        
+        # 2. 1차 점수 계산
+        base_quant, base_ai = calculate_base_scores(vix, spy, ma200, rsi, dd, tnx, tnx_avg, raw_ai_score)
+        
+        # 3. 메타 필터 가동 (오류 교정)
+        final_quant, final_ai, meta_alerts = apply_meta_filter(base_quant, base_ai, vix, spy_return_5d)
+        
+        # 4. 최종 합산 및 상한선(Max 10) 적용
+        total_score = min(final_quant + final_ai, 10)
+        last_score = state.get("last_score", 0)
+        status, strategy = get_action(total_score)
+        
+        # 노이즈 필터 (낮은 점수 구간의 1점 차이 무시)
+        if abs(total_score - last_score) < 2 and total_score < 4:
+            strategy = "어제와 상황 동일 (노이즈 필터 유지)"
+            
+        # 상태 저장
+        state["last_score"] = total_score
+        with open(STATE_FILE, "w") as f: json.dump(state, f)
 
-        # 판단
-        score = calculate_score(vix, vix_c, spy, spy_m, rsi, dd, tnx, dxy, qqq, qqq_m, gld, gld_m)
-        level, status, strategy = get_action(score)
-        fx_action = get_fx_action(usd, usd_1y, usd_2y)
+        # 5. 리포트 작성
+        meta_msg = "\n".join(meta_alerts) if meta_alerts else "✅ 시스템 정상 작동 중 (특이사항 없음)"
+        
+        msg = f"""
+🤖 **하이브리드 퀀트 V4.0 (Meta-Engine)**
 
-        # 상태 비교
-        last_score = load_state()
-        should_send = (last_score is None or score != last_score)
-
-        crash = (last_score is not None and score - last_score >= 3)
-        panic = (vix >= 45 or crash)
-        panic_text = "💀 패닉 감지!\n" if panic else ""
-
-        if should_send:
-            tnx_display = f"{tnx}%" if tnx > 0 else "N/A"
-            dxy_display = dxy if dxy > 0 else "N/A"
-
-            msg = f"""{panic_text}
-🤖 투자 리포트
-
-{status} 단계 {level} | 점수 {score}
-👉 전략: {strategy}
+🔥 **현재 상태: {status}**
+👉 **최종 점수: {total_score}점** (어제 {last_score}점)
+👉 **행동 지침: {strategy}**
 
 ━━━━━━━━━━
-💱 환율
-현재: {usd}원
-1Y: {usd_1y} | 2Y: {usd_2y}
-👉 {fx_action}
+🛡️ **메타 감시자 (System Check)**
+{meta_msg}
 
 ━━━━━━━━━━
-📊 시장 상태
+📊 **핵심 시장 지표**
+• VIX: {vix} | 5일 수익률: {spy_return_5d}%
+• SPY: {spy} (200일선: {ma200})
+• 금리(TNX): {tnx}% (평균: {tnx_avg}%)
+• RSI: {rsi} | 낙폭: {dd}%
 
-{signal_vix(vix)} VIX        {vix:<6} ({vix_c*100:+.1f}%)
-{signal_trend(spy, spy_m)} SPY        {spy:<6} / {spy_m}
-{signal_trend(qqq, qqq_m)} QQQ        {qqq:<6} / {qqq_m}
-
-{signal_tnx(tnx, tnx_avg)} 금리       {tnx_display}
-{signal_dxy(dxy, dxy_avg)} 달러지수   {dxy_display}
-{signal_rsi(rsi)} RSI        {rsi}
-{signal_dd(dd)} 낙폭        {dd}%
+━━━━━━━━━━
+🧠 **AI 뉴스 코멘트**
+• {ai_reason}
 """
-
-            send(msg)
-            save_state(score)
-            print("알림 전송 완료")
-
-        else:
-            print("변동 없음")
+        send(msg)
+        print("V4.0 리포트 발송 완료!")
 
     except Exception as e:
-        print("에러:", e)
+        print("에러 발생:", e)
+        send(f"🚨 시스템 에러: {e}")
 
 if __name__ == "__main__":
     main()
