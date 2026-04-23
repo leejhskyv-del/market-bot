@@ -1,3 +1,4 @@
 yfinance
 requests
-pandas
+feedparser
+openai
