@@ -31,7 +31,7 @@ def extract_json(text):
     return {"score": 0, "reason": "파싱 실패", "category": "기타"}
 
 # ==========================================
-# 2. 뉴스 수집 (안정화 버전)
+# 2. 뉴스 수집 (안정화)
 # ==========================================
 def fetch_news():
     headlines = []
@@ -54,7 +54,7 @@ def fetch_news():
     return " ".join(headlines)
 
 # ==========================================
-# 3. AI 분석
+# 3. AI 분석 (한국어 강제)
 # ==========================================
 def get_ai_score(news_text):
 
@@ -62,15 +62,20 @@ def get_ai_score(news_text):
         return 0, "뉴스 부족", "데이터부족"
 
     prompt = f"""
-Return ONLY JSON.
+너는 금융 시장 분석가다.
+
+반드시 한국어로만 답변해라.
+영어 절대 사용하지 마라.
+
+아래 JSON 형식으로만 답변해라.
 
 {{
  "score": int,
- "reason": "Korean short sentence",
+ "reason": "한국어 한줄 요약",
  "category": "War/Pandemic/Finance/Macro/Etc"
 }}
 
-News:
+뉴스:
 {news_text}
 """
 
@@ -79,7 +84,8 @@ News:
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=200
+            max_tokens=200,
+            response_format={"type": "json_object"}  # 🔥 핵심 안정화
         )
 
         raw = response.choices[0].message.content
@@ -115,14 +121,18 @@ def get_market_data():
         return 0, 0
 
 # ==========================================
-# 5. 퀀트 점수
+# 5. 퀀트 점수 (-2 포함)
 # ==========================================
 def calculate_score(spy_return, vix):
 
     score = 0
 
+    # 🔥 과열 (상승 과도)
+    if spy_return > 0.03:
+        score = -2
+
     # 하락
-    if spy_return < -0.03:
+    elif spy_return < -0.03:
         score += 2
     elif spy_return < -0.01:
         score += 1
@@ -136,7 +146,25 @@ def calculate_score(spy_return, vix):
     return score
 
 # ==========================================
-# 6. 텔레그램 전송
+# 6. 단계 시스템
+# ==========================================
+def get_stage(score):
+
+    if score <= -2:
+        return "🔥 과열", "추격 금지 / 일부 익절"
+    elif score >= 8:
+        return "🚨 패닉", "강력 매수 구간"
+    elif score >= 5:
+        return "🔴 위험", "비중 축소"
+    elif score >= 3:
+        return "🟠 경고", "부분 익절"
+    elif score >= 1:
+        return "🟡 주의", "관망"
+    else:
+        return "🟢 정상", "보유"
+
+# ==========================================
+# 7. 텔레그램 전송
 # ==========================================
 def send_telegram(msg):
     try:
@@ -146,7 +174,7 @@ def send_telegram(msg):
         print("텔레그램 오류:", e)
 
 # ==========================================
-# 7. 메인
+# 8. 메인
 # ==========================================
 def main():
 
@@ -154,7 +182,10 @@ def main():
 
     news = fetch_news()
 
-    ai_score, ai_reason, category = get_ai_score(news)
+    if not news:
+        ai_score, ai_reason, category = 0, "뉴스 없음", "없음"
+    else:
+        ai_score, ai_reason, category = get_ai_score(news)
 
     spy_return, vix = get_market_data()
 
@@ -168,22 +199,31 @@ def main():
 
     total_score = quant_score + final_ai
 
-    # 안전 캡
-    total_score = min(total_score, 10)
+    # 🔥 점수 범위 유지
+    total_score = max(-2, total_score)
+    total_score = min(10, total_score)
+
+    stage, action = get_stage(total_score)
 
     msg = f"""
-📊 시장 리포트
+🔥 하이브리드 퀀트 V4.0
 
-지수 변화: {spy_return:.2%}
-VIX: {vix:.2f}
+{stage}
 
-퀀트 점수: {quant_score}
-AI 점수: {ai_score} ({category})
+👉 최종 점수: {total_score}점
+👉 전략: {action}
 
-최종 점수: {total_score}
+────────────────
 
-🧠 AI 의견:
-{ai_reason}
+📊 시장
+• SPY 변화: {spy_return:.2%}
+• VIX: {vix:.2f}
+
+────────────────
+
+🧠 AI 분석
+• 점수: {ai_score} ({category})
+• 의견: {ai_reason}
 """
 
     print(msg)
