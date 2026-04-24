@@ -22,13 +22,13 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # 공통 유틸
 # ==========================================
 def safe_request(func, retry=3, delay=2):
-    for i in range(retry):
+    for _ in range(retry):
         try:
             data = func()
             if data:
                 return data
         except Exception as e:
-            print("재시도 에러:", e)
+            print("재시도:", e)
         time.sleep(delay)
     return None
 
@@ -69,18 +69,31 @@ def fetch_news():
     return " ".join(headlines)
 
 # ==========================================
-# AI
+# AI (한국어 강제)
 # ==========================================
 def get_ai_score(news):
     if not news:
         return 0, "뉴스 없음", "없음"
 
     prompt = f"""
-뉴스를 보고 시장 영향 2~3줄 요약
-JSON:
-{{"score": int, "reason": "", "category": ""}}
+너는 금융 매크로 분석가다.
+
+반드시 한국어로만 답변하라.
+영어 절대 사용하지 마라.
+
+뉴스를 보고 시장 영향 핵심을 2~3줄로 요약하라.
+
+형식(JSON만 출력):
+{{
+ "score": int,
+ "reason": "한국어 2~3줄 요약",
+ "category": "Macro"
+}}
+
+뉴스:
 {news}
 """
+
     try:
         res = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -89,12 +102,13 @@ JSON:
             response_format={"type": "json_object"}
         )
         data = extract_json(res.choices[0].message.content)
-        return data["score"], data["reason"], data["category"]
-    except:
+        return data.get("score", 0), data.get("reason", ""), data.get("category", "")
+    except Exception as e:
+        print("AI 오류:", e)
         return 0, "AI 오류", "에러"
 
 # ==========================================
-# Alpha
+# Alpha (주식)
 # ==========================================
 def get_stock(symbol):
     url = "https://www.alphavantage.co/query"
@@ -104,7 +118,6 @@ def get_stock(symbol):
         "apikey": ALPHA_API_KEY
     }
 
-    # 🚨 여기가 수정된 핵심 포인트입니다! (params=params 추가)
     data = requests.get(url, params=params).json()
 
     if "Time Series (Daily)" not in data:
@@ -122,35 +135,8 @@ def get_stock(symbol):
 
     return cur, prev, sma200
 
-def get_fx():
-    url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "FX_DAILY",
-        "from_symbol": "USD",
-        "to_symbol": "KRW",
-        "apikey": ALPHA_API_KEY
-    }
-
-    # 🚨 여기도 완벽하게 수정했습니다! (params=params 추가)
-    data = requests.get(url, params=params).json()
-
-    if "Time Series FX (Daily)" not in data:
-        print("환율 오류:", data)
-        return None
-
-    ts = data["Time Series FX (Daily)"]
-    dates = list(ts.keys())
-
-    closes = [float(ts[d]["4. close"]) for d in dates[:500]]
-
-    cur = closes[0]
-    avg1 = sum(closes[:252]) / 252
-    avg2 = sum(closes[:500]) / 500
-
-    return cur, avg1, avg2
-
 # ==========================================
-# FRED
+# FRED (VIX, DXY, 환율)
 # ==========================================
 def get_fred(series):
     url = "https://api.stlouisfed.org/fred/series/observations"
@@ -167,6 +153,37 @@ def get_fred(series):
     if len(values) >= 2:
         return values[-1], values[-2]
     return 0, 0
+
+def get_fx():
+    values = get_fred_series("DEXKOUS")
+    if len(values) < 500:
+        return 0, 0, 0
+
+    cur = values[-1]
+    avg1 = sum(values[-252:]) / 252
+    avg2 = sum(values[-500:]) / 500
+
+    return cur, avg1, avg2
+
+def get_fred_series(series):
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series,
+        "api_key": FRED_API_KEY,
+        "file_type": "json"
+    }
+
+    data = requests.get(url, params=params).json()
+    obs = data.get("observations", [])
+    return [float(o["value"]) for o in obs if o["value"] != "."]
+
+def fx_status(cur, avg1):
+    if cur > avg1 * 1.02:
+        return "고평가"
+    elif cur < avg1 * 0.98:
+        return "저평가"
+    else:
+        return "중립"
 
 # ==========================================
 # 계산
@@ -219,8 +236,6 @@ def send(msg):
 # ==========================================
 def main():
 
-    hour = datetime.now().hour
-
     news = fetch_news()
     ai_score, ai_reason, _ = get_ai_score(news)
 
@@ -230,21 +245,23 @@ def main():
     qqq = safe_request(lambda: get_stock("QQQ"))
     time.sleep(2)
 
-    fx = safe_request(get_fx)
-
     if not spy or not qqq:
         send("⚠️ 핵심 지표 실패")
         return
 
-    if not fx:
-        fx = (0, 0, 0)
-
     spy_c, spy_p, spy_s = spy
     qqq_c, qqq_p, qqq_s = qqq
-    fx_c, fx1, fx2 = fx
 
     vix_c, vix_p = get_fred("VIXCLS")
     dxy_c, _ = get_fred("DTWEXBGS")
+
+    fx_values = get_fred_series("DEXKOUS")
+    if len(fx_values) >= 500:
+        fx_c = fx_values[-1]
+        fx1 = sum(fx_values[-252:]) / 252
+        fx2 = sum(fx_values[-500:]) / 500
+    else:
+        fx_c, fx1, fx2 = 0, 0, 0
 
     spy_g = gap(spy_c, spy_s)
     qqq_g = gap(qqq_c, qqq_s)
@@ -256,6 +273,7 @@ def main():
     st, act = stage(score)
 
     msg = f"""🤖 퀀텀 인사이트
+
 {ai_reason}
 
 상태: {st} ({score}) → {act}
@@ -264,7 +282,7 @@ SPY {spy_c:.2f} ({pct(spy_c, spy_p):+.2f}%) {signal(spy_g)}
 QQQ {qqq_c:.2f} ({pct(qqq_c, qqq_p):+.2f}%) {signal(qqq_g)}
 VIX {vix_c:.2f} ({pct(vix_c, vix_p):+.2f}%)
 
-환율 {fx_c:.0f} (1Y {fx1:.0f} / 2Y {fx2:.0f})
+환율 {fx_c:.0f} (1Y {fx1:.0f} / 2Y {fx2:.0f}, {fx_status(fx_c, fx1)})
 """
 
     print(msg)
