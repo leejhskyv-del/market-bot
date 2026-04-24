@@ -1,4 +1,3 @@
-import yfinance as yf
 import requests
 import os
 import json
@@ -10,9 +9,13 @@ from openai import OpenAI
 # ==========================================
 # 환경 변수
 # ==========================================
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ALPHA_API_KEY = os.getenv("ALPHA_API_KEY")
+FRED_API_KEY = os.getenv("FRED_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ==========================================
 # JSON 파싱
@@ -30,16 +33,16 @@ def extract_json(text):
     return {"score": 0, "reason": "파싱 실패", "category": "기타"}
 
 # ==========================================
-# 뉴스 수집
+# 뉴스
 # ==========================================
 def fetch_news():
     urls = [
-        "https://finance.yahoo.com/news/rssindex",
-        "https://feeds.reuters.com/reuters/businessNews"
+        "https://feeds.reuters.com/reuters/businessNews",
+        "https://finance.yahoo.com/news/rssindex"
     ]
     headers = {"User-Agent": "Mozilla/5.0"}
-    headlines = []
 
+    headlines = []
     for url in urls:
         try:
             r = requests.get(url, headers=headers, timeout=5)
@@ -51,7 +54,7 @@ def fetch_news():
     return " ".join(headlines)
 
 # ==========================================
-# AI 분석 (2~3줄 요약)
+# AI (2~3줄)
 # ==========================================
 def get_ai_score(news):
     if not news:
@@ -60,15 +63,12 @@ def get_ai_score(news):
     prompt = f"""
 너는 금융 매크로 분석가다.
 
-아래 뉴스들을 보고 시장에 영향을 주는 핵심을
-"2~3줄로 한국어 요약"하라.
+뉴스를 보고 시장 영향을 2~3줄로 요약해라.
 
-그리고 점수도 함께 반환하라.
-
-형식(JSON만 출력):
+형식(JSON):
 {{
  "score": int,
- "reason": "줄바꿈 포함 2~3줄 요약",
+ "reason": "2~3줄 요약",
  "category": "Macro"
 }}
 
@@ -89,46 +89,77 @@ def get_ai_score(news):
         return 0, "AI 오류", "에러"
 
 # ==========================================
-# 시장 데이터
+# Alpha 주식 데이터
 # ==========================================
-def get_market():
-    spy_data = yf.Ticker("SPY").history(period="1y")["Close"]
-    qqq_data = yf.Ticker("QQQ").history(period="1y")["Close"]
-    vix_data = yf.Ticker("^VIX").history(period="5d")["Close"]
+def get_stock(symbol):
+    url = "https://www.alphavantage.co/query"
+    params = {
+        "function": "TIME_SERIES_DAILY",
+        "symbol": symbol,
+        "apikey": ALPHA_API_KEY
+    }
 
-    spy_cur = spy_data.iloc[-1]
-    spy_prev = spy_data.iloc[-2]
+    r = requests.get(url)
+    data = r.json()
 
-    qqq_cur = qqq_data.iloc[-1]
-    qqq_prev = qqq_data.iloc[-2]
+    ts = data.get("Time Series (Daily)", {})
+    dates = list(ts.keys())
 
-    vix_cur = vix_data.iloc[-1]
-    vix_prev = vix_data.iloc[-2]
+    if len(dates) < 2:
+        return None
 
-    spy_sma = spy_data.rolling(200).mean().iloc[-1]
-    qqq_sma = qqq_data.rolling(200).mean().iloc[-1]
+    cur = float(ts[dates[0]]["4. close"])
+    prev = float(ts[dates[1]]["4. close"])
 
-    dxy = yf.Ticker("DX-Y.NYB").history(period="1d")["Close"].iloc[-1]
+    closes = [float(ts[d]["4. close"]) for d in dates[:200]]
+    sma200 = sum(closes) / len(closes)
 
-    return spy_cur, spy_prev, spy_sma, qqq_cur, qqq_prev, qqq_sma, vix_cur, vix_prev, dxy
+    return cur, prev, sma200
 
 # ==========================================
-# 환율 (1년 + 2년 평균)
+# FRED 데이터
+# ==========================================
+def get_fred(series):
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series,
+        "api_key": FRED_API_KEY,
+        "file_type": "json"
+    }
+
+    r = requests.get(url, params=params)
+    data = r.json()
+
+    obs = data.get("observations", [])
+    values = [float(o["value"]) for o in obs if o["value"] != "."]
+
+    return values[-1]
+
+# ==========================================
+# 환율 (Alpha)
 # ==========================================
 def get_fx():
-    data = yf.Ticker("KRW=X").history(period="2y")["Close"]
-    current = data.iloc[-1]
-    avg_1y = data[-252:].mean()
-    avg_2y = data.mean()
-    return current, avg_1y, avg_2y
+    url = "https://www.alphavantage.co/query"
+    params = {
+        "function": "FX_DAILY",
+        "from_symbol": "USD",
+        "to_symbol": "KRW",
+        "apikey": ALPHA_API_KEY
+    }
 
-def fx_status(cur, avg1):
-    if cur > avg1 * 1.02:
-        return "고평가"
-    elif cur < avg1 * 0.98:
-        return "저평가"
-    else:
-        return "중립"
+    r = requests.get(url)
+    data = r.json()
+
+    ts = data.get("Time Series FX (Daily)", {})
+    dates = list(ts.keys())
+
+    closes = [float(ts[d]["4. close"]) for d in dates[:500]]
+
+    cur = closes[0]
+    avg_1y = sum(closes[:252]) / 252
+    avg_2y = sum(closes[:500]) / 500
+
+    return cur, avg_1y, avg_2y
 
 # ==========================================
 # 계산
@@ -198,13 +229,24 @@ def send(msg):
 # ==========================================
 def main():
 
-    now = datetime.now()
-    hour = now.hour
+    hour = datetime.now().hour
 
     news = fetch_news()
     ai_score, ai_reason, _ = get_ai_score(news)
 
-    spy_cur, spy_prev, spy_sma, qqq_cur, qqq_prev, qqq_sma, vix_cur, vix_prev, dxy = get_market()
+    spy = get_stock("SPY")
+    qqq = get_stock("QQQ")
+    vix = get_stock("^VIX")
+
+    if not spy or not qqq or not vix:
+        send("⚠️ 데이터 수집 실패 (API)")
+        return
+
+    spy_cur, spy_prev, spy_sma = spy
+    qqq_cur, qqq_prev, qqq_sma = qqq
+    vix_cur, vix_prev, _ = vix
+
+    dxy = get_fred("DTWEXBGS")
     fx, fx1, fx2 = get_fx()
 
     spy_gap = sma_gap(spy_cur, spy_sma)
@@ -219,23 +261,18 @@ def main():
 
     st, act = stage(total_score)
 
-    # ==========================================
-    # 알림 제어 (핵심🔥)
-    # ==========================================
+    # 알림 제어
     send_flag = False
 
     if total_score >= 5:
         send_flag = True
-
     elif total_score >= 3:
         if hour % 3 == 0:
             send_flag = True
-
     else:
         if hour % 6 == 0:
             send_flag = True
 
-    # 미국장 시간 보정
     if 22 <= hour or hour <= 5:
         if total_score >= 3:
             send_flag = True
@@ -243,9 +280,6 @@ def main():
     if not send_flag:
         return
 
-    # ==========================================
-    # 메시지
-    # ==========================================
     msg = f"""🤖 퀀텀 인사이트 봇
 🤖 AI
 {ai_reason}
@@ -257,7 +291,7 @@ SPY {spy_cur:.2f} ({change_pct(spy_cur, spy_prev):+.2f}%) {spy_sig} {spy_gap:+.1
 QQQ {qqq_cur:.2f} ({change_pct(qqq_cur, qqq_prev):+.2f}%) {qqq_sig} {qqq_gap:+.1f}%
 VIX {vix_cur:.2f} ({change_pct(vix_cur, vix_prev):+.2f}%)
 
-💱 환율 {fx:.0f} (1Y {fx1:.0f} / 2Y {fx2:.0f}, {fx_status(fx, fx1)})
+💱 환율 {fx:.0f} (1Y {fx1:.0f} / 2Y {fx2:.0f}, {"고평가" if fx > fx1 else "저평가"})
 """
 
     print(msg)
