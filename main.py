@@ -3,6 +3,7 @@ import os
 import json
 import feedparser
 import re
+import time
 from datetime import datetime
 from openai import OpenAI
 
@@ -54,7 +55,7 @@ def fetch_news():
     return " ".join(headlines)
 
 # ==========================================
-# AI (2~3줄)
+# AI 분석 (2~3줄)
 # ==========================================
 def get_ai_score(news):
     if not news:
@@ -85,11 +86,12 @@ def get_ai_score(news):
         )
         data = extract_json(res.choices[0].message.content)
         return data["score"], data["reason"], data["category"]
-    except:
+    except Exception as e:
+        print("AI 오류:", e)
         return 0, "AI 오류", "에러"
 
 # ==========================================
-# Alpha 주식 데이터
+# Alpha 주식
 # ==========================================
 def get_stock(symbol):
     url = "https://www.alphavantage.co/query"
@@ -102,7 +104,11 @@ def get_stock(symbol):
     r = requests.get(url)
     data = r.json()
 
-    ts = data.get("Time Series (Daily)", {})
+    if "Time Series (Daily)" not in data:
+        print("Alpha 오류:", data)
+        return None
+
+    ts = data["Time Series (Daily)"]
     dates = list(ts.keys())
 
     if len(dates) < 2:
@@ -117,7 +123,7 @@ def get_stock(symbol):
     return cur, prev, sma200
 
 # ==========================================
-# FRED 데이터
+# FRED (오늘/어제)
 # ==========================================
 def get_fred(series):
     url = "https://api.stlouisfed.org/fred/series/observations"
@@ -133,10 +139,13 @@ def get_fred(series):
     obs = data.get("observations", [])
     values = [float(o["value"]) for o in obs if o["value"] != "."]
 
-    return values[-1]
+    if len(values) >= 2:
+        return values[-1], values[-2]
+    else:
+        return 0, 0
 
 # ==========================================
-# 환율 (Alpha)
+# 환율
 # ==========================================
 def get_fx():
     url = "https://www.alphavantage.co/query"
@@ -150,16 +159,20 @@ def get_fx():
     r = requests.get(url)
     data = r.json()
 
-    ts = data.get("Time Series FX (Daily)", {})
+    if "Time Series FX (Daily)" not in data:
+        print("환율 오류:", data)
+        return None
+
+    ts = data["Time Series FX (Daily)"]
     dates = list(ts.keys())
 
     closes = [float(ts[d]["4. close"]) for d in dates[:500]]
 
     cur = closes[0]
-    avg_1y = sum(closes[:252]) / 252
-    avg_2y = sum(closes[:500]) / 500
+    avg1 = sum(closes[:252]) / 252
+    avg2 = sum(closes[:500]) / 500
 
-    return cur, avg_1y, avg_2y
+    return cur, avg1, avg2
 
 # ==========================================
 # 계산
@@ -177,6 +190,9 @@ def sma_signal(gap):
         return "🟡"
     else:
         return "🔴"
+
+def is_valid(val, min_v, max_v):
+    return min_v < val < max_v
 
 # ==========================================
 # 점수
@@ -235,19 +251,32 @@ def main():
     ai_score, ai_reason, _ = get_ai_score(news)
 
     spy = get_stock("SPY")
-    qqq = get_stock("QQQ")
-    vix = get_stock("^VIX")
+    time.sleep(1)
 
-    if not spy or not qqq or not vix:
+    qqq = get_stock("QQQ")
+    time.sleep(1)
+
+    fx_data = get_fx()
+
+    if not spy or not qqq or not fx_data:
         send("⚠️ 데이터 수집 실패 (API)")
         return
 
     spy_cur, spy_prev, spy_sma = spy
     qqq_cur, qqq_prev, qqq_sma = qqq
-    vix_cur, vix_prev, _ = vix
+    fx, fx1, fx2 = fx_data
 
-    dxy = get_fred("DTWEXBGS")
-    fx, fx1, fx2 = get_fx()
+    vix_cur, vix_prev = get_fred("VIXCLS")
+    dxy_cur, _ = get_fred("DTWEXBGS")
+
+    # 데이터 검증
+    if not is_valid(spy_cur, 100, 1000):
+        send("⚠️ SPY 오류")
+        return
+
+    if not is_valid(vix_cur, 5, 100):
+        send("⚠️ VIX 오류")
+        return
 
     spy_gap = sma_gap(spy_cur, spy_sma)
     qqq_gap = sma_gap(qqq_cur, qqq_sma)
@@ -255,13 +284,13 @@ def main():
     spy_sig = sma_signal(spy_gap)
     qqq_sig = sma_signal(qqq_gap)
 
-    quant_score = calc_score(spy_gap, qqq_gap, vix_cur, dxy)
+    quant_score = calc_score(spy_gap, qqq_gap, vix_cur, dxy_cur)
     total_score = quant_score + int(round(ai_score * 0.7))
     total_score = max(-2, min(10, total_score))
 
     st, act = stage(total_score)
 
-    # 알림 제어
+    # 알림 로직
     send_flag = False
 
     if total_score >= 5:
