@@ -104,7 +104,8 @@ def get_stock(symbol):
         "apikey": ALPHA_API_KEY
     }
 
-    data = requests.get(url).json()
+    # 🚨 여기가 수정된 핵심 포인트입니다! (params=params 추가)
+    data = requests.get(url, params=params).json()
 
     if "Time Series (Daily)" not in data:
         print(f"{symbol} 오류:", data)
@@ -130,7 +131,8 @@ def get_fx():
         "apikey": ALPHA_API_KEY
     }
 
-    data = requests.get(url).json()
+    # 🚨 여기도 완벽하게 수정했습니다! (params=params 추가)
+    data = requests.get(url, params=params).json()
 
     if "Time Series FX (Daily)" not in data:
         print("환율 오류:", data)
