@@ -89,7 +89,7 @@ def extract_json(text):
     return {"score": 0, "reason": "분석 실패"}
 
 # ==========================================
-# 📰 뉴스 & AI 리스크 스코어
+# 📰 뉴스 & AI 리스크 스코어 (보수적 프롬프트)
 # ==========================================
 def fetch_news():
     urls = [
@@ -108,17 +108,20 @@ def fetch_news():
 
 def get_ai(news):
     prompt = f"""
-너는 냉철한 거시경제 리스크 분석가다.
-최근 경제 뉴스를 기반으로 미국 주식시장에 미치는 영향을 2~3줄 요약하라.
+너는 냉철하고 보수적인 거시경제 리스크 분석가다.
+
+최근 경제 뉴스 헤드라인을 기반으로 글로벌 주식시장(특히 미국 증시)에 미칠 리스크 영향을 2~3줄로 명확하고 직설적으로 요약하라.
 
 리스크 점수 기준:
-- 강한 악재/패닉: +2
+- 강한 악재 / 패닉 유발: +2
 - 보통 악재: +1
-- 중립: 0
+- 중립 또는 미미한 영향: 0
 - 보통 호재: -1
-- 강한 호재: -2
+- 강한 호재 / 리스크 완화: -2
 
-JSON 형식: {{"score": int, "reason": "간결한 한국어 설명"}}
+반드시 아래 JSON 형식으로만 출력:
+{{"score": int, "reason": "간결하고 직설적인 한국어 설명"}}
+
 뉴스: {news}
 """
     try:
@@ -185,16 +188,35 @@ def get_fx_final():
     return 1400, "DEFAULT"
 
 # ==========================================
-# 🪙 금 데이터 & 매크로 해석 (보조 레이어)
+# 🪙 금 데이터 & 매크로 해석 (야후 파이낸스 교체)
 # ==========================================
 def get_gold():
-    data = safe(lambda:get_series("GOLDAMGBD228NLBM"))
-    if not data: return None
-    c = data[-1]
-    p1 = data[-2] if len(data) >= 2 else c
-    p20 = data[-20] if len(data) >= 20 else c
-    avg = sum(data[-252:]) / 252 if len(data) >= 252 else c
-    return c, p1, p20, avg
+    try:
+        url = "https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1y"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code != 200:
+            log(f"금 데이터 API 응답 오류: {res.status_code}", "error")
+            return None
+            
+        data = res.json()
+        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        values = [float(v) for v in closes if v is not None]
+        
+        if len(values) < 20: 
+            return None
+            
+        c = values[-1]
+        p1 = values[-2] if len(values) >= 2 else c
+        p20 = values[-20] if len(values) >= 20 else c
+        avg = sum(values[-252:]) / 252 if len(values) >= 252 else c
+        
+        return c, p1, p20, avg
+    except Exception as e:
+        log(f"금 데이터 수집 오류: {e}", "error")
+        return None
 
 def gold_signal(gold):
     if not gold: return "데이터 없음"
@@ -347,10 +369,10 @@ def main():
     spy_m = momentum(spy_c, spy_p)
     qqq_m = momentum(qqq_c, qqq_p)
 
-    # 금 포맷팅 및 매크로 해석
+    # 금 포맷팅 및 매크로 해석 (.0f 적용)
     if gold_data:
         gold_c, gold_p1, _, _ = gold_data
-        gold_str = f"{gold_c:.1f} ({pct(gold_c, gold_p1):+.2f}%) → {gold_st}"
+        gold_str = f"{gold_c:.0f} ({pct(gold_c, gold_p1):+.2f}%) → {gold_st}"
     else:
         gold_str = "수집 실패"
 
