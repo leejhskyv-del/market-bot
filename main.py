@@ -17,7 +17,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ==========================================
-# 공통 안전 호출
+# 안전 호출
 # ==========================================
 def safe(func, retry=3, delay=1):
     for _ in range(retry):
@@ -25,8 +25,8 @@ def safe(func, retry=3, delay=1):
             res = func()
             if res:
                 return res
-        except Exception as e:
-            print("재시도:", e)
+        except:
+            pass
         time.sleep(delay)
     return None
 
@@ -63,15 +63,15 @@ def fetch_news():
         except:
             continue
 
-    return " ".join(headlines)
+    text = " ".join(headlines)
+    return text if text else "최근 경제 뉴스 없음"
 
 # ==========================================
-# AI (한국어 고정)
+# AI
 # ==========================================
 def get_ai(news):
     prompt = f"""
 반드시 한국어로만 작성.
-
 뉴스 기반 시장 영향 2~3줄 요약.
 
 JSON:
@@ -92,76 +92,161 @@ JSON:
         return 0, "AI 오류"
 
 # ==========================================
-# FRED 데이터
+# FRED
 # ==========================================
 def get_series(series):
     try:
         url = "https://api.stlouisfed.org/fred/series/observations"
-        params = {
-            "series_id": series,
-            "api_key": FRED_API_KEY,
-            "file_type": "json"
-        }
+        params = {"series_id": series, "api_key": FRED_API_KEY, "file_type": "json"}
 
-        data = requests.get(url, params=params, timeout=5).json()
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code != 200:
+            return None
+
+        data = res.json()
         obs = data.get("observations", [])
 
         values = [float(o["value"]) for o in obs if o["value"] != "."]
 
-        if len(values) < 5:
-            print(f"{series} 데이터 부족")
+        if len(values) < 50:
+            return None
+
+        if not values or all(v == 0 for v in values):
             return None
 
         return values
 
-    except Exception as e:
-        print(f"{series} 오류:", e)
+    except:
         return None
 
 # ==========================================
-# 지수 처리
+# 지수
 # ==========================================
 def get_index(series):
     v = get_series(series)
-    if not v or len(v) < 200:
+    if not v:
+        return None
+    return v[-1], v[-2], sum(v[-min(200,len(v)):]) / min(200,len(v))
+
+# ==========================================
+# 금리 자동 보정
+# ==========================================
+def get_rate_full():
+    data = get_series("DGS10")
+    if not data:
         return None
 
-    return v[-1], v[-2], sum(v[-200:]) / 200
+    current = data[-1]
+    prev = data[-2]
+    avg_1y = sum(data[-252:]) / 252 if len(data) >= 252 else current
+    avg_2y = sum(data[-500:]) / 500 if len(data) >= 500 else avg_1y
+
+    return current, prev, avg_1y, avg_2y
 
 # ==========================================
 # 계산
 # ==========================================
 def pct(c,p): return (c-p)/p*100
 def gap(c,s): return (c-s)/s*100
-def sig(g): return "🟢" if g>3 else "🟡" if g>0 else "🔴"
+def momentum(c,p): return (c-p)/p*100
 
 # ==========================================
-# 점수
+# 패닉
 # ==========================================
-def calc(spy_g, qqq_g, vix, dxy):
-    s=0
-    if spy_g<-3: s+=2
-    elif spy_g<-1: s+=1
+def check_panic(vix, spy_m):
+    return vix > 35 or spy_m < -4
 
-    if qqq_g<-3: s+=2
-    elif qqq_g<-1: s+=1
+# ==========================================
+# 점수 계산
+# ==========================================
+def calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s):
 
-    if vix>25: s+=2
-    elif vix>20: s+=1
+    score = 0
 
-    if dxy>105: s+=1
+    # 추세
+    if spy_g < -3: score += 2
+    elif spy_g < -1: score += 1
+    if qqq_g < -3: score += 2
+    elif qqq_g < -1: score += 1
 
-    return s
+    # 모멘텀
+    if spy_m < -2: score += 1
+    if qqq_m < -2: score += 1
 
-def stage(s):
-    if s>=5: return "🔴 위험","비중 축소"
-    elif s>=3: return "🟠 경고","부분 익절"
-    elif s>=1: return "🟡 주의","관망"
-    else: return "🟢 정상","보유"
+    # VIX (튜닝)
+    if vix > 30: score += 2
+    elif vix > 24: score += 1
+
+    if dxy > 105: score += 1
+
+    # 금리 자동 보정
+    if rate_tuple:
+        current, prev, avg_1y, avg_2y = rate_tuple
+
+        if current > avg_1y * 1.1:
+            score += 1
+        elif current > avg_1y * 1.05:
+            score += 0.5
+
+        if (current - prev) > 0.07:
+            score += 0.5
+
+        if current > avg_2y * 1.15:
+            score += 0.5
+
+    # AI
+    ai_score = int(round(ai_s * 0.6))
+    ai_score = max(-2, min(2, ai_score))
+
+    panic = check_panic(vix, spy_m)
+
+    if not panic and 3 <= score <= 8:
+        score += ai_score
+
+    return score, panic
+
+# ==========================================
+# 상태
+# ==========================================
+def get_stage(score, panic):
+    if panic: return "💀 패닉","분할 매수"
+    if score <= 3: return "🟢 공격","매수"
+    elif score <= 6: return "🔵 상승","매수 유지"
+    elif score <= 8: return "🟡 중립","속도 조절"
+    elif score <= 11: return "🟠 경고","매수 중단"
+    else: return "🔴 위험","비중 축소"
+
+# ==========================================
+# 자동매수
+# ==========================================
+def auto_buy(score, panic):
+    if panic: return "🚀 150~200% (분할)"
+    if score <= 6: return "✅ 100%"
+    elif score <= 8: return "⚠️ 50%"
+    else: return "⛔ STOP"
 
 # ==========================================
 # 텔레그램
 # ==========================================
+def get_last_msg():
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        res = requests.get(url).json()
+        msgs = res.get("result", [])
+        if not msgs:
+            return None
+        return msgs[-1]["message"]["text"]
+    except:
+        return None
+
+def parse_prev(text):
+    try:
+        score = int(re.search(r"\((\d+)\)", text).group(1))
+        state = re.search(r"상태: (.+?) \(", text).group(1)
+        return score, state
+    except:
+        return None, None
+
 def send(msg):
     try:
         requests.post(
@@ -169,8 +254,8 @@ def send(msg):
             data={"chat_id":CHAT_ID,"text":msg},
             timeout=5
         )
-    except Exception as e:
-        print("텔레그램 오류:", e)
+    except:
+        pass
 
 # ==========================================
 # 메인
@@ -193,42 +278,77 @@ def main():
     vix_data = safe(lambda:get_series("VIXCLS"))
     dxy_data = safe(lambda:get_series("DTWEXBGS"))
     fx_data = safe(lambda:get_series("DEXKOUS"))
+    rate_tuple = safe(get_rate_full)
 
-    if not vix_data or not dxy_data or not fx_data:
-        send("⚠️ 매크로 데이터 실패")
-        return
+    data_fail = False
+    warn = []
 
-    vix = vix_data[-1]
-    dxy = dxy_data[-1]
+    if not vix_data:
+        data_fail=True; warn.append("VIX")
+    if not dxy_data:
+        data_fail=True; warn.append("DXY")
+    if not rate_tuple:
+        warn.append("금리")
 
-    fx_c = fx_data[-1]
-    fx1 = sum(fx_data[-252:]) / 252
-    fx2 = sum(fx_data[-500:]) / 500 if len(fx_data)>=500 else fx1
+    warn_text = "⚠️ 데이터 오류: " + ", ".join(warn) if warn else ""
 
-    spy_g = gap(spy_c,spy_s)
-    qqq_g = gap(qqq_c,qqq_s)
+    vix = vix_data[-1] if vix_data else 24
+    dxy = dxy_data[-1] if dxy_data else 100
+    fx_c = fx_data[-1] if fx_data else 1400
 
-    score = calc(spy_g, qqq_g, vix, dxy)
-    score += int(round(ai_s*0.7))
-    score = max(0, min(10, score))
+    spy_g = gap(spy_c, spy_s)
+    qqq_g = gap(qqq_c, qqq_s)
 
-    st, act = stage(score)
+    spy_m = momentum(spy_c, spy_p)
+    qqq_m = momentum(qqq_c, qqq_p)
 
-    msg=f"""🤖 퀀텀 인사이트
+    score, panic = calc_total(
+        spy_g, qqq_g,
+        spy_m, qqq_m,
+        vix, dxy,
+        rate_tuple,
+        ai_s
+    )
+
+    if data_fail:
+        score = min(score, 8)
+
+    st, act = get_stage(score, panic)
+    auto = auto_buy(score, panic)
+
+    msg = f"""🤖 퀀텀 인사이트
 
 {ai_r}
 
-상태: {st} ({score}) → {act}
+{warn_text}
 
-SP500 {spy_c:.0f} ({pct(spy_c,spy_p):+.2f}%) {sig(spy_g)}
-NASDAQ {qqq_c:.0f} ({pct(qqq_c,qqq_p):+.2f}%) {sig(qqq_g)}
+상태: {st} ({int(score)}) → {act}
+자동매수: {auto}
+
+SP500 {spy_c:.0f} ({pct(spy_c,spy_p):+.2f}%)
+NASDAQ {qqq_c:.0f} ({pct(qqq_c,qqq_p):+.2f}%)
 VIX {vix:.2f}
-
-환율 {fx_c:.0f} (1Y {fx1:.0f} / 2Y {fx2:.0f})
 """
 
-    print(msg)
-    send(msg)
+    prev_text = get_last_msg()
+    prev_score, prev_state = parse_prev(prev_text) if prev_text else (None, None)
+
+    send_flag = False
+
+    if panic:
+        send_flag = True
+    elif prev_state != st:
+        send_flag = True
+    elif prev_score is not None and abs(score - prev_score) >= 2:
+        send_flag = True
+    elif data_fail:
+        send_flag = True
+
+    if send_flag:
+        send(msg)
+        print("전송")
+    else:
+        print("변화 없음")
 
 if __name__=="__main__":
     main()
