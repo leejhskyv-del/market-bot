@@ -57,7 +57,7 @@ def safe(func, retry=3, delay=1):
     return None
 
 # ==========================================
-# 📊 FRED (디버깅 강화)
+# 📊 FRED
 # ==========================================
 def get_series(series):
     try:
@@ -139,7 +139,7 @@ def get_fx():
     return 1400, "DEFAULT"
 
 # ==========================================
-# 🪙 금 (Yahoo + fallback)
+# 🪙 금 (Yahoo + FRED fallback)
 # ==========================================
 def get_gold():
     try:
@@ -170,7 +170,7 @@ def get_gold_final():
         return gold, "YAHOO"
 
     log("⚠️ 금 Yahoo 실패 → FRED 대체", "error")
-    data = safe(lambda:get_series("GOLDAMGBD228NLBM"))
+    data = safe(lambda:get_series("GOLDPMGBD228NLBM"))
     if data:
         c = data[-1]
         p1 = data[-2] if len(data)>=2 else c
@@ -203,22 +203,6 @@ def calc_score(spy_g, qqq_g, vix):
     return s
 
 # ==========================================
-# 🛠 상태 저장
-# ==========================================
-STATE_FILE = "state.json"
-
-def load_state():
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_state(score, state):
-    with open(STATE_FILE,"w") as f:
-        json.dump({"score":score,"state":state}, f)
-
-# ==========================================
 # 📩 텔레그램
 # ==========================================
 def send(msg):
@@ -238,7 +222,6 @@ def main():
     log("🚀 시스템 시작")
     log("데이터 수집 시작...")
 
-    # 🔥 API KEY 체크
     if not FRED_API_KEY:
         log("🚨 FRED_API_KEY 없음!", "error")
     else:
@@ -248,7 +231,7 @@ def main():
     qqq = safe(lambda:get_index("NASDAQCOM"))
 
     if not spy or not qqq:
-        send("⚠️ 지수 데이터 실패 (FRED 응답 없음 / API 문제)")
+        send("⚠️ 지수 데이터 실패 (FRED/API 문제)")
         return
 
     spy_c, spy_p, spy_s = spy
@@ -264,19 +247,18 @@ def main():
     qqq_g = gap(qqq_c, qqq_s)
 
     score = calc_score(spy_g, qqq_g, vix)
-
-    state = "정상" if score < 3 else "주의"
+    state = "🟢 정상" if score < 3 else "🟡 주의"
 
     msg = f"""🤖 퀀텀 인사이트
 
 상태: {state} ({score})
 
-SP500 {spy_c:.0f}
-NASDAQ {qqq_c:.0f}
-VIX {vix:.2f}
+📊 SP500 {spy_c:.0f} ({pct(spy_c,spy_p):+.2f}%)
+📊 NASDAQ {qqq_c:.0f} ({pct(qqq_c,qqq_p):+.2f}%)
 
-USD/KRW {fx:.0f} ({fx_src})
+⚠️ VIX {vix:.2f}
 
+💰 환율 {fx:.0f} ({fx_src})
 🪙 금 {gold_src}
 """
 
@@ -284,5 +266,3 @@ USD/KRW {fx:.0f} ({fx_src})
 
 if __name__=="__main__":
     main()
-
-# rebuild
