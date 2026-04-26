@@ -26,7 +26,7 @@ def log(msg, level="info"):
 log("🚀 퀀텀 인사이트 시스템 구동 시작")
 
 # ==========================================
-# 환경 변수
+# 환경 변수 설정
 # ==========================================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FRED_API_KEY = os.getenv("FRED_API_KEY")
@@ -36,7 +36,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ==========================================
-# 파라미터 (튜닝 변수)
+# ⚙️ 파라미터 (튜닝 변수)
 # ==========================================
 VIX_HIGH = 28
 VIX_WARN = 22
@@ -68,7 +68,7 @@ def save_state(score, state):
         log(f"상태 파일 저장 실패: {e}", "error")
 
 # ==========================================
-# 유틸리티 함수 모음
+# 유틸리티 함수
 # ==========================================
 def safe(func, retry=3, delay=1):
     for _ in range(retry):
@@ -89,7 +89,7 @@ def extract_json(text):
     return {"score": 0, "reason": "분석 실패"}
 
 # ==========================================
-# 뉴스 & AI 로직
+# 📰 뉴스 & AI 리스크 스코어
 # ==========================================
 def fetch_news():
     urls = [
@@ -134,7 +134,7 @@ JSON 형식: {{"score": int, "reason": "간결한 한국어 설명"}}
         return 0, "AI 오류"
 
 # ==========================================
-# FRED & 시장 데이터
+# 📈 FRED 시장 데이터
 # ==========================================
 def get_series(series):
     try:
@@ -173,9 +173,6 @@ def get_fx_current():
             if 1000 < fx < 2000: return fx
     except: return None
 
-# ==========================================
-# 🥈 환율 소스(Source) 추적 로직 추가
-# ==========================================
 def get_fx_final():
     fx_now = safe(get_fx_current)
     if fx_now: return fx_now, "NAVER"
@@ -188,22 +185,60 @@ def get_fx_final():
     return 1400, "DEFAULT"
 
 # ==========================================
+# 🪙 금 데이터 & 매크로 해석 (보조 레이어)
+# ==========================================
+def get_gold():
+    data = safe(lambda:get_series("GOLDAMGBD228NLBM"))
+    if not data: return None
+    c = data[-1]
+    p1 = data[-2] if len(data) >= 2 else c
+    p20 = data[-20] if len(data) >= 20 else c
+    avg = sum(data[-252:]) / 252 if len(data) >= 252 else c
+    return c, p1, p20, avg
+
+def gold_signal(gold):
+    if not gold: return "데이터 없음"
+    c, p1, p20, avg = gold
+    short_term = (c - p20) / p20 * 100
+    long_term_gap = (c - avg) / avg * 100
+
+    if short_term > 3 and long_term_gap > 10: return "🚨 과열/위험"
+    elif short_term > 2: return "⚠️ 상승 경계"
+    elif short_term < -2: return "🟢 하락 안정"
+    else: return "➖ 중립"
+
+def get_macro_insight(gold, dxy, spy_m):
+    if not gold: return "💡 매크로: 데이터 부족"
+    c, p1, p20, avg = gold
+    gold_change = (c - p20) / p20 * 100
+
+    if gold_change > 2 and dxy > 104:
+        return "💡 매크로: 금·달러 동반 상승 (극단적 안전자산 쏠림 🚨)"
+    elif gold_change > 2 and spy_m > 0:
+        return "💡 매크로: 금·지수 동반 상승 (유동성 or 인플레 헷지 💸)"
+    elif gold_change < -2 and spy_m > 0:
+        return "💡 매크로: 금 하락·지수 상승 (완벽한 Risk-On 🟢)"
+    elif gold_change < -2 and spy_m < -2:
+        return "💡 매크로: 금·지수 동반 하락 (현금 확보/패닉셀 💀)"
+    else:
+        return "💡 매크로: 뚜렷한 쏠림 없음 (개별 이슈 장세 ➖)"
+
+# ==========================================
 # 🛠 META 상태 생성기
 # ==========================================
-def build_meta_status(fx_source, vix_data, dxy_data, spy, qqq):
+def build_meta_status(fx_source, vix_data, dxy_data, spy, qqq, gold_data):
     issues = []
     if fx_source != "NAVER": issues.append("환율대체")
     if not vix_data: issues.append("VIX 오류")
     if not dxy_data: issues.append("DXY 오류")
     if not spy or not qqq: issues.append("지수 오류")
+    if not gold_data: issues.append("금 오류")
     
-    if issues:
-        return "⚠️ " + ", ".join(issues)
-    else:
-        return "✅ 정상"
+    if issues: return "⚠️ " + ", ".join(issues)
+    else: return "✅ 정상"
 
 # ==========================================
-# 계산 및 상태 판별
+# 🧮 핵심 계산 로직 (점수/상태)
 # ==========================================
 def pct(c,p): return (c-p)/p*100
 def gap(c,s): return (c-s)/s*100
@@ -267,7 +302,7 @@ def send(msg):
         log(f"텔레그램 전송 오류: {e}", "error")
 
 # ==========================================
-# 메인
+# 🚀 메인 오퍼레이션
 # ==========================================
 def main():
     log("데이터 수집 시작...")
@@ -275,7 +310,7 @@ def main():
     news = fetch_news()
     ai_s, ai_r = get_ai(news)
 
-    # 데이터 일괄 수집
+    # 기본 시장 데이터 수집
     spy = safe(lambda:get_index("SP500"))
     qqq = safe(lambda:get_index("NASDAQCOM"))
     vix_data = safe(lambda:get_series("VIXCLS"))
@@ -283,11 +318,14 @@ def main():
     fx_data = safe(lambda:get_series("DEXKOUS"))
     rate_tuple = safe(get_rate_full)
     fx, fx_source = get_fx_final()
+    
+    # 금 데이터 수집
+    gold_data = get_gold()
+    gold_st = gold_signal(gold_data)
 
-    # META 상태 먼저 판별
-    meta_status = build_meta_status(fx_source, vix_data, dxy_data, spy, qqq)
+    # META 상태 확인 (금 데이터 포함)
+    meta_status = build_meta_status(fx_source, vix_data, dxy_data, spy, qqq, gold_data)
 
-    # 지수 실패 시 로직 중단 및 META 상태 즉각 전송
     if not spy or not qqq:
         log("⚠️ 지수 데이터 실패", "error")
         send(f"⚠️ 지수 데이터 수집 실패로 계산 중단\n\n━━━━━━━━━━━━━━━\n🛠 META\n{meta_status}")
@@ -295,7 +333,6 @@ def main():
 
     spy_c, spy_p, spy_s = spy
     qqq_c, qqq_p, qqq_s = qqq
-
     vix = vix_data[-1] if vix_data else 22
     dxy = dxy_data[-1] if dxy_data else 100
 
@@ -310,13 +347,23 @@ def main():
     spy_m = momentum(spy_c, spy_p)
     qqq_m = momentum(qqq_c, qqq_p)
 
+    # 금 포맷팅 및 매크로 해석
+    if gold_data:
+        gold_c, gold_p1, _, _ = gold_data
+        gold_str = f"{gold_c:.1f} ({pct(gold_c, gold_p1):+.2f}%) → {gold_st}"
+    else:
+        gold_str = "수집 실패"
+
+    macro_insight_text = get_macro_insight(gold_data, dxy, spy_m)
+
+    # 점수 계산 및 행동 도출
     score, panic = calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s)
     st, act = get_stage(score, panic)
     auto = auto_buy(score, panic)
     spy_trend = trend_status(spy_g)
     qqq_trend = trend_status(qqq_g)
 
-    # META 블록이 추가된 최종 메시지
+    # 텔레그램 최종 메시지 조합
     msg = f"""🤖 퀀텀 인사이트
 
 {ai_r}
@@ -333,6 +380,8 @@ NASDAQ {qqq_c:.0f} ({pct(qqq_c,qqq_p):+.2f}%)
 
 ⚠️ 리스크
 VIX {vix:.2f}
+🪙 금 {gold_str}
+{macro_insight_text}
 
 💰 환율
 USD/KRW {fx:.0f} ({fx_source})
@@ -343,6 +392,7 @@ USD/KRW {fx:.0f} ({fx_source})
 {meta_status}
 """
 
+    # 파일 기반 상태 비교 로직
     prev = load_state()
     prev_score = prev.get("score")
     prev_state = prev.get("state")
