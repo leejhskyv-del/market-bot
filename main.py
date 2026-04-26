@@ -156,14 +156,25 @@ def get_rate_full():
     return current, prev, avg_1y, avg_2y
 
 # ==========================================
-# 환율 (네이버 + FRED 평균)
+# 환율 (네이버 + 안전 처리)
 # ==========================================
 def get_fx_current():
     try:
         url = "https://finance.naver.com/marketindex/exchangeDetail.naver?marketindexCd=FX_USDKRW"
         res = requests.get(url, timeout=5).text
-        price = re.search(r"(\d{3,4}\.\d{2})", res)
-        return float(price.group(1)) if price else None
+
+        match = re.search(r"<span class=\"value\">([\d,]+\.\d+)</span>", res)
+
+        if match:
+            fx = float(match.group(1).replace(",", ""))
+
+            if fx < 1000 or fx > 2000:
+                return None
+
+            return fx
+
+        return None
+
     except:
         return None
 
@@ -345,10 +356,10 @@ SP500 {spy_c:.0f} ({pct(spy_c,spy_p):+.2f}%)
 NASDAQ {qqq_c:.0f} ({pct(qqq_c,qqq_p):+.2f}%)
 → {qqq_trend}
 
-🌪 리스크
+⚠️ 리스크
 VIX {vix:.2f}
 
-💱 환율
+💰 환율
 USD/KRW {fx:.0f}
 (1Y {fx1:.0f} / 2Y {fx2:.0f})
 """
