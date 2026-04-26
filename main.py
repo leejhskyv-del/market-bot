@@ -72,20 +72,22 @@ def fetch_news():
 # ==========================================
 def get_ai(news):
     prompt = f"""
-반드시 한국어로만 작성.
+너는 냉철한 거시경제 리스크 분석가다.
 
-뉴스 기반 시장 영향 2~3줄 요약.
+최근 경제 뉴스 헤드라인을 기반으로
+글로벌 주식시장(특히 미국)에 미치는 영향을 2~3줄로 요약하라.
 
-점수(score) 기준:
-- 심각한 악재/공포: +2
-- 일반적 악재: +1
+리스크 점수 기준:
+- 강한 악재/패닉: +2
+- 보통 악재: +1
 - 중립: 0
-- 일반적 호재: -1
-- 강력한 호재: -2
+- 보통 호재: -1
+- 강한 호재: -2
 
-JSON:
-{{"score": int, "reason": ""}}
+반드시 아래 JSON 형식으로만 답변:
+{{"score": int, "reason": "간결한 한국어 설명"}}
 
+뉴스:
 {news}
 """
     try:
@@ -141,7 +143,7 @@ def get_index(series):
     return v[-1], v[-2], sum(v[-min(200,len(v)):]) / min(200,len(v))
 
 # ==========================================
-# 금리 자동 보정
+# 금리
 # ==========================================
 def get_rate_full():
     data = get_series("DGS10")
@@ -156,7 +158,7 @@ def get_rate_full():
     return current, prev, avg_1y, avg_2y
 
 # ==========================================
-# 환율 (네이버 + 안전 처리)
+# 환율 (네이버 정확 파싱)
 # ==========================================
 def get_fx_current():
     try:
@@ -165,18 +167,14 @@ def get_fx_current():
 
         res = requests.get(url, headers=headers, timeout=5).text
 
-        # USD 행 전체 추출
         row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res, re.DOTALL)
-
         if not row:
             return None
 
-        # 그 안에서 첫 번째 숫자 (매매 기준율)
         price = re.search(r"<td class=\"sale\">([\d,]+\.\d+)</td>", row.group())
 
         if price:
             fx = float(price.group(1).replace(",", ""))
-
             if 1000 < fx < 2000:
                 return fx
 
@@ -205,25 +203,34 @@ def check_panic(vix, spy_m):
     return vix > 35 or spy_m < -4
 
 # ==========================================
-# 점수 계산 (리스크형)
+# 점수 계산 (리스크형 + 과열 방어)
 # ==========================================
 def calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s):
 
     score = 0
 
+    # 하락 리스크
     if spy_g < -3: score += 2
     elif spy_g < -1: score += 1
+
     if qqq_g < -3: score += 2
     elif qqq_g < -1: score += 1
 
     if spy_m < -2: score += 1
     if qqq_m < -2: score += 1
 
+    # 🔥 과열 방어
+    if spy_g > 18: score += 2
+    elif spy_g > 12: score += 1
+
+    # VIX
     if vix > 28: score += 2
     elif vix > 22: score += 1
 
+    # 달러
     if dxy > 105: score += 1
 
+    # 금리
     if rate_tuple:
         c, p, a1, a2 = rate_tuple
 
@@ -234,6 +241,7 @@ def calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s):
 
         if c > a2 * 1.15: score += 0.5
 
+    # AI 보정
     ai_score = int(round(ai_s * 0.6))
     ai_score = max(-2, min(2, ai_score))
 
