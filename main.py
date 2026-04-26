@@ -160,18 +160,25 @@ def get_rate_full():
 # ==========================================
 def get_fx_current():
     try:
-        url = "https://finance.naver.com/marketindex/exchangeDetail.naver?marketindexCd=FX_USDKRW"
-        res = requests.get(url, timeout=5).text
+        url = "https://finance.naver.com/marketindex/exchangeList.naver"
+        headers = {"User-Agent": "Mozilla/5.0"}
 
-        match = re.search(r"<span class=\"value\">([\d,]+\.\d+)</span>", res)
+        res = requests.get(url, headers=headers, timeout=5).text
 
-        if match:
-            fx = float(match.group(1).replace(",", ""))
+        # USD 행 전체 추출
+        row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res, re.DOTALL)
 
-            if fx < 1000 or fx > 2000:
-                return None
+        if not row:
+            return None
 
-            return fx
+        # 그 안에서 첫 번째 숫자 (매매 기준율)
+        price = re.search(r"<td class=\"sale\">([\d,]+\.\d+)</td>", row.group())
+
+        if price:
+            fx = float(price.group(1).replace(",", ""))
+
+            if 1000 < fx < 2000:
+                return fx
 
         return None
 
