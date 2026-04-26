@@ -1,4 +1,4 @@
 yfinance
-requests
+openai>=1.0.0
 feedparser
-openai
+requests
