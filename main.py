@@ -4,6 +4,7 @@ import json
 import feedparser
 import re
 import time
+from datetime import datetime, timedelta
 from openai import OpenAI
 
 # ==========================================
@@ -67,12 +68,20 @@ def fetch_news():
     return text if text else "최근 경제 뉴스 없음"
 
 # ==========================================
-# AI
+# AI (리스크 기준 명확화)
 # ==========================================
 def get_ai(news):
     prompt = f"""
 반드시 한국어로만 작성.
+
 뉴스 기반 시장 영향 2~3줄 요약.
+
+점수(score) 기준:
+- 심각한 악재/공포: +2
+- 일반적 악재: +1
+- 중립: 0
+- 일반적 호재: -1
+- 강력한 호재: -2
 
 JSON:
 {{"score": int, "reason": ""}}
@@ -96,8 +105,15 @@ JSON:
 # ==========================================
 def get_series(series):
     try:
+        start_date = (datetime.now() - timedelta(days=1000)).strftime('%Y-%m-%d')
+
         url = "https://api.stlouisfed.org/fred/series/observations"
-        params = {"series_id": series, "api_key": FRED_API_KEY, "file_type": "json"}
+        params = {
+            "series_id": series,
+            "api_key": FRED_API_KEY,
+            "file_type": "json",
+            "observation_start": start_date
+        }
 
         res = requests.get(url, params=params, timeout=5)
         if res.status_code != 200:
@@ -134,20 +150,20 @@ def get_rate_full():
 
     current = data[-1]
     prev = data[-2]
-    avg_1y = sum(data[-252:]) / 252 if len(data) >= 252 else current
-    avg_2y = sum(data[-500:]) / 500 if len(data) >= 500 else avg_1y
+    avg_1y = sum(data[-252:]) / 252 if len(data)>=252 else current
+    avg_2y = sum(data[-500:]) / 500 if len(data)>=500 else avg_1y
 
     return current, prev, avg_1y, avg_2y
 
 # ==========================================
-# 환율
+# 환율 (네이버 + FRED 평균)
 # ==========================================
-def get_fx_full():
+def get_fx_current():
     try:
-        url = "https://api.exchangerate.host/latest?base=USD&symbols=KRW"
-        res = requests.get(url, timeout=5).json()
-        current = res["rates"]["KRW"]
-        return current, current, current
+        url = "https://finance.naver.com/marketindex/exchangeDetail.naver?marketindexCd=FX_USDKRW"
+        res = requests.get(url, timeout=5).text
+        price = re.search(r"(\d{3,4}\.\d{2})", res)
+        return float(price.group(1)) if price else None
     except:
         return None
 
@@ -158,15 +174,11 @@ def pct(c,p): return (c-p)/p*100
 def gap(c,s): return (c-s)/s*100
 def momentum(c,p): return (c-p)/p*100
 
-def trend_status(gap):
-    if gap > 5:
-        return f"🟢 강상승 (+{gap:.1f}%)"
-    elif gap > 0:
-        return f"🔵 상승 (+{gap:.1f}%)"
-    elif gap > -3:
-        return f"🟡 경계 ({gap:.1f}%)"
-    else:
-        return f"🔴 하락 ({gap:.1f}%)"
+def trend_status(g):
+    if g > 5: return f"🟢 강상승 (+{g:.1f}%)"
+    elif g > 0: return f"🔵 상승 (+{g:.1f}%)"
+    elif g > -3: return f"🟡 경계 ({g:.1f}%)"
+    else: return f"🔴 하락 ({g:.1f}%)"
 
 # ==========================================
 # 패닉
@@ -189,25 +201,20 @@ def calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s):
     if spy_m < -2: score += 1
     if qqq_m < -2: score += 1
 
-    # 🔥 리스크형 VIX
     if vix > 28: score += 2
     elif vix > 22: score += 1
 
     if dxy > 105: score += 1
 
     if rate_tuple:
-        current, prev, avg_1y, avg_2y = rate_tuple
+        c, p, a1, a2 = rate_tuple
 
-        if current > avg_1y * 1.1:
-            score += 1
-        elif current > avg_1y * 1.05:
-            score += 0.5
+        if c > a1 * 1.1: score += 1
+        elif c > a1 * 1.05: score += 0.5
 
-        if (current - prev) > 0.07:
-            score += 0.5
+        if (c - p) > 0.07: score += 0.5
 
-        if current > avg_2y * 1.15:
-            score += 0.5
+        if c > a2 * 1.15: score += 0.5
 
     ai_score = int(round(ai_s * 0.6))
     ai_score = max(-2, min(2, ai_score))
@@ -247,9 +254,7 @@ def get_last_msg():
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
         res = requests.get(url).json()
         msgs = res.get("result", [])
-        if not msgs:
-            return None
-        return msgs[-1]["message"]["text"]
+        return msgs[-1]["message"]["text"] if msgs else None
     except:
         return None
 
@@ -291,16 +296,20 @@ def main():
 
     vix_data = safe(lambda:get_series("VIXCLS"))
     dxy_data = safe(lambda:get_series("DTWEXBGS"))
-    fx_tuple = safe(get_fx_full)
+    fx_data = safe(lambda:get_series("DEXKOUS"))
+    fx_current = safe(get_fx_current)
     rate_tuple = safe(get_rate_full)
 
     vix = vix_data[-1] if vix_data else 22
     dxy = dxy_data[-1] if dxy_data else 100
 
-    if fx_tuple:
-        fx, fx1, fx2 = fx_tuple
+    if fx_data:
+        fx1 = sum(fx_data[-252:]) / 252
+        fx2 = sum(fx_data[-500:]) / 500 if len(fx_data)>=500 else fx1
     else:
-        fx, fx1, fx2 = 1400, 1400, 1400
+        fx1 = fx2 = fx_current if fx_current else 1400
+
+    fx = fx_current if fx_current else fx1
 
     spy_g = gap(spy_c, spy_s)
     qqq_g = gap(qqq_c, qqq_s)
