@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from openai import OpenAI
 
 # ==========================================
-# 🥇 로깅(Logging) 설정
+# 🥇 기초 인프라 (로그 & 환경변수)
 # ==========================================
 logging.basicConfig(
     filename="bot_operation.log",
@@ -23,11 +23,7 @@ def log(msg, level="info"):
     if level == "info": logging.info(msg)
     elif level == "error": logging.error(msg)
 
-log("🚀 퀀텀 인사이트 시스템 구동 시작")
-
-# ==========================================
-# 환경 변수 설정
-# ==========================================
+# Render 환경변수에서 키 로드
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -36,7 +32,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ==========================================
-# ⚙️ 파라미터 (튜닝 변수)
+# ⚙️ 리스크 임계치 (전략 파라미터)
 # ==========================================
 VIX_HIGH = 28
 VIX_WARN = 22
@@ -44,10 +40,10 @@ SPY_OVERHEAT_HIGH = 18
 SPY_OVERHEAT_WARN = 12
 DXY_WARN = 105
 PANIC_VIX = 35
-PANIC_SPY_MOMENTUM = -4
+PANIC_MOMENTUM = -4
 
 # ==========================================
-# 🧠 상태 저장 (불사신 로직)
+# 🧠 상태 저장 (Persistence)
 # ==========================================
 STATE_FILE = "bot_state.json"
 
@@ -56,8 +52,7 @@ def load_state():
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-    except Exception as e:
-        log(f"상태 파일 로드 실패: {e}", "error")
+    except: pass
     return {}
 
 def save_state(score, state):
@@ -65,90 +60,32 @@ def save_state(score, state):
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump({"score": score, "state": state}, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log(f"상태 파일 저장 실패: {e}", "error")
+        log(f"상태 저장 실패: {e}", "error")
 
 # ==========================================
-# 🛡 강화된 safe 호출 (1분 간격 재시도 로직 적용)
+# 🛡️ 강화된 데이터 수집 (1분 간격 재시도)
 # ==========================================
 def safe(func, retry=5, delay=60):
     for i in range(retry):
         try:
             res = func()
             if res: return res
-        except Exception as e: 
-            log(f"⚠️ {i+1}차 시도 중 예외 발생: {e}", "error")
-        
+        except Exception as e:
+            log(f"⚠️ {i+1}차 시도 중 예외: {e}", "error")
         if i < retry - 1:
-            log(f"⏳ 데이터 준비 대기 중... {delay}초 후 {i+2}차 재시도 진행")
+            log(f"⏳ 데이터 갱신 대기 중... ({i+1}/5)")
             time.sleep(delay)
     return None
 
-def extract_json(text):
-    try: return json.loads(text.strip())
-    except:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try: return json.loads(match.group())
-            except: pass
-    return {"score": 0, "reason": "분석 실패"}
-
 # ==========================================
-# 📰 뉴스 & AI 리스크 스코어
-# ==========================================
-def fetch_news():
-    urls = [
-        "https://feeds.reuters.com/reuters/businessNews",
-        "https://finance.yahoo.com/news/rssindex"
-    ]
-    headlines = []
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=5)
-            feed = feedparser.parse(r.text)
-            headlines += [e.title for e in feed.entries[:5]]
-        except: continue
-    text = " ".join(headlines)
-    return text if text else "최근 경제 뉴스 없음"
-
-def get_ai(news):
-    prompt = f"""
-너는 냉철하고 보수적인 거시경제 리스크 분석가다.
-
-최근 경제 뉴스 헤드라인을 기반으로 글로벌 주식시장(특히 미국 증시)에 미칠 리스크 영향을 2~3줄로 명확하고 직설적으로 요약하라.
-
-리스크 점수 기준:
-- 강한 악재 / 패닉 유발: +2
-- 보통 악재: +1
-- 중립 또는 미미한 영향: 0
-- 보통 호재: -1
-- 강한 호재 / 리스크 완화: -2
-
-반드시 아래 JSON 형식으로만 출력:
-{{"score": int, "reason": "간결하고 직설적인 한국어 설명"}}
-
-뉴스: {news}
-"""
-    try:
-        r = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"user","content":prompt}],
-            temperature=0,
-            response_format={"type":"json_object"}
-        )
-        d = extract_json(r.choices[0].message.content)
-        return d.get("score",0), d.get("reason","")
-    except:
-        return 0, "AI 오류"
-
-# ==========================================
-# 📈 FRED 시장 데이터
+# 📊 시장 데이터 수집 함수
 # ==========================================
 def get_series(series):
     try:
         start_date = (datetime.now() - timedelta(days=1000)).strftime('%Y-%m-%d')
         url = "https://api.stlouisfed.org/fred/series/observations"
         params = {"series_id": series, "api_key": FRED_API_KEY, "file_type": "json", "observation_start": start_date}
-        res = requests.get(url, params=params, timeout=15) # 타임아웃 15초로 강화
+        res = requests.get(url, params=params, timeout=15)
         if res.status_code != 200: return None
         obs = res.json().get("observations", [])
         values = [float(o["value"]) for o in obs if o["value"] != "."]
@@ -158,262 +95,174 @@ def get_series(series):
 def get_index(series):
     v = get_series(series)
     if not v: return None
+    # 현재가, 전일가, 200일 이평선 반환
     return v[-1], v[-2], sum(v[-min(200,len(v)):]) / min(200,len(v))
 
-def get_rate_full():
-    data = get_series("DGS10")
-    if not data: return None
-    c, p = data[-1], data[-2]
-    a1 = sum(data[-252:]) / 252 if len(data)>=252 else c
-    a2 = sum(data[-500:]) / 500 if len(data)>=500 else a1
-    return c, p, a1, a2
-
-def get_fx_current():
+def get_fx_final():
+    # 네이버 실시간 환율 시도
     try:
         url = "https://finance.naver.com/marketindex/exchangeList.naver"
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10).text
         row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res, re.DOTALL)
-        if not row: return None
         price = re.search(r"<td class=\"sale\">([\d,]+\.\d+)</td>", row.group())
-        if price:
-            fx = float(price.group(1).replace(",", ""))
-            if 1000 < fx < 2000: return fx
-    except: return None
-
-def get_fx_final():
-    # 환율은 굳이 길게 기다릴 필요 없으므로 기존 safe 옵션 유지
-    fx_now = safe(get_fx_current, retry=2, delay=5)
-    if fx_now: return fx_now, "NAVER"
+        if price: return float(price.group(1).replace(",", "")), "NAVER"
+    except: pass
     
-    log("⚠️ 네이버 환율 실패 -> FRED(플랜B) 가동", "error")
+    # 실패 시 FRED 시도
     fx_data = safe(lambda:get_series("DEXKOUS"), retry=2, delay=5)
     if fx_data: return fx_data[-1], "FRED"
-    
-    log("🚨 환율 완전 실패 -> 기본값 사용", "error")
     return 1400, "DEFAULT"
 
-# ==========================================
-# 🪙 금 데이터 & 매크로 해석 (야후 파이낸스)
-# ==========================================
 def get_gold():
     try:
         url = "https://query2.finance.yahoo.com/v8/finance/chart/GC=F?interval=1d&range=1y"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code != 200: return None
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         data = res.json()
         closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
         values = [float(v) for v in closes if v is not None]
-        if len(values) < 20: return None
-        c = values[-1]
-        p1 = values[-2] if len(values) >= 2 else c
-        p20 = values[-20] if len(values) >= 20 else c
-        avg = sum(values[-252:]) / 252 if len(values) >= 252 else c
-        return c, p1, p20, avg
+        return values[-1], values[-2], values[-20], sum(values[-252:]) / 252
     except: return None
 
-def gold_signal(gold):
-    if not gold: return "데이터 없음"
-    c, p1, p20, avg = gold
-    short_term = (c - p20) / p20 * 100
-    long_term_gap = (c - avg) / avg * 100
-    if short_term > 3 and long_term_gap > 10: return "🚨 과열/위험"
-    elif short_term > 2: return "⚠️ 상승 경계"
-    elif short_term < -2: return "🟢 하락 안정"
-    else: return "➖ 중립"
+# ==========================================
+# 🧠 AI 분석 엔진 (0.5 가중치 리스크 판단)
+# ==========================================
+def fetch_news():
+    urls = ["https://feeds.reuters.com/reuters/businessNews", "https://finance.yahoo.com/news/rssindex"]
+    headlines = []
+    for url in urls:
+        try:
+            feed = feedparser.parse(requests.get(url, timeout=5).text)
+            headlines += [e.title for e in feed.entries[:5]]
+        except: continue
+    return " ".join(headlines) if headlines else "뉴스 수집 지연"
 
-def get_macro_insight(gold, dxy, spy_m):
-    if not gold: return "💡 매크로: 데이터 부족"
-    c, p1, p20, avg = gold
-    gold_change = (c - p20) / p20 * 100
-    if gold_change > 2 and dxy > 104:
-        return "💡 매크로: 금·달러 동반 상승 (극단적 안전자산 쏠림 🚨)"
-    elif gold_change > 2 and spy_m > 0:
-        return "💡 매크로: 금·지수 동반 상승 (유동성 or 인플레 헷지 💸)"
-    elif gold_change < -2 and spy_m > 0:
-        return "💡 매크로: 금 하락·지수 상승 (완벽한 Risk-On 🟢)"
-    elif gold_change < -2 and spy_m < -2:
-        return "💡 매크로: 금·지수 동반 하락 (현금 확보/패닉셀 💀)"
-    else:
-        return "💡 매크로: 뚜렷한 쏠림 없음 (개별 이슈 장세 ➖)"
+def get_ai_analysis(news, market_summary):
+    prompt = f"""
+너는 월스트리트 출신의 거시경제 리스크 분석가다. 아래 지표와 뉴스를 보고 '오늘의 투자 전략'을 JSON으로 작성하라.
+데이터: {market_summary}
+뉴스: {news}
+
+분석 포인트: 시스템 리스크, 유동성 위기, 블랙스완 가능성 여부.
+점수 기준: 강한 악재(+2) ~ 강한 호재(-2).
+
+JSON 형식:
+{{
+  "score": int,
+  "summary": "시장 한줄 요약",
+  "risk": "핵심 리스크 2가지",
+  "strategy": "투자 행동 제안"
+}}
+"""
+    try:
+        r = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role":"user","content":prompt}],
+            response_format={"type":"json_object"}
+        )
+        return json.loads(r.choices[0].message.content)
+    except:
+        return {"score": 0, "summary": "분석 지연", "risk": "데이터 수집 중", "strategy": "관망"}
 
 # ==========================================
-# 🛠 META 상태 생성기
+# 🧮 종합 리스크 스코어링 (3중 방어막)
 # ==========================================
-def build_meta_status(fx_source, vix_data, dxy_data, spy, qqq, gold_data):
-    issues = []
-    if fx_source != "NAVER": issues.append("환율대체")
-    if not vix_data: issues.append("VIX 오류")
-    if not dxy_data: issues.append("DXY 오류")
-    if not spy or not qqq: issues.append("지수 오류")
-    if not gold_data: issues.append("금 오류")
-    if issues: return "⚠️ " + ", ".join(issues)
-    else: return "✅ 정상"
+def calc_final_score(spy_g, spy_m, vix, dxy, ai_score):
+    score = 0
+    # 1단계: 지표 기반 (하드 데이터)
+    if spy_g < -1: score += 1
+    if spy_g < -3: score += 2
+    if spy_m < -4: score += 2  # 급락 모멘텀
+    
+    if vix > VIX_WARN: score += 1
+    if vix > VIX_HIGH: score += 2
+    if vix > 45: score += 4    # 블랙스완 임계치
+    
+    if dxy > DXY_WARN: score += 1
+    if spy_g > SPY_OVERHEAT_WARN: score += 1
+
+    # 2단계: AI 분석 기반 (소프트 데이터 - 0.5 가중치 적용)
+    score += (ai_score * 0.5)
+    
+    return max(0, min(15, score))
+
+def get_stage(s, p):
+    if p: return "💀 패닉", "분할 매수"
+    if s <= 2: return "🟢 공격", "매수"
+    elif s <= 5: return "🔵 상승", "매수 유지"
+    elif s <= 7: return "🟡 중립", "속도 조절"
+    elif s <= 10: return "🟠 경고", "매수 중단"
+    else: return "🔴 위험", "비중 축소"
 
 # ==========================================
-# 🧮 핵심 계산 로직
+# 🚀 메인 프로세스
 # ==========================================
 def pct(c,p): return (c-p)/p*100
 def gap(c,s): return (c-s)/s*100
-def momentum(c,p): return (c-p)/p*100
-
-def trend_status(g):
-    if g > 5: return f"🟢 강상승 (+{g:.1f}%)"
-    elif g > 0: return f"🔵 상승 (+{g:.1f}%)"
-    elif g > -3: return f"🟡 경계 ({g:.1f}%)"
-    else: return f"🔴 하락 ({g:.1f}%)"
-
-def check_panic(vix, spy_m): return vix > PANIC_VIX or spy_m < PANIC_SPY_MOMENTUM
-
-def calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s):
-    score = 0
-    if spy_g < -3: score += 2
-    elif spy_g < -1: score += 1
-    if qqq_g < -3: score += 2
-    elif qqq_g < -1: score += 1
-    if spy_m < -2: score += 1
-    if qqq_m < -2: score += 1
-    if spy_g > SPY_OVERHEAT_HIGH: score += 2
-    elif spy_g > SPY_OVERHEAT_WARN: score += 1
-    if vix > VIX_HIGH: score += 2
-    elif vix > VIX_WARN: score += 1
-    if dxy > DXY_WARN: score += 1
-    if rate_tuple:
-        c, p, a1, a2 = rate_tuple
-        if c > a1 * 1.1: score += 1
-        elif c > a1 * 1.05: score += 0.5
-        if (c - p) > 0.07: score += 0.5
-        if c > a2 * 1.15: score += 0.5
-    ai_score = max(-2, min(2, int(round(ai_s * 0.6))))
-    panic = check_panic(vix, spy_m)
-    if not panic and 3 <= score <= 8: score += ai_score
-    return score, panic
-
-def get_stage(score, panic):
-    if panic: return "💀 패닉","분할 매수"
-    if score <= 2: return "🟢 공격","매수"
-    elif score <= 5: return "🔵 상승","매수 유지"
-    elif score <= 7: return "🟡 중립","속도 조절"
-    elif score <= 10: return "🟠 경고","매수 중단"
-    else: return "🔴 위험","비중 축소"
-
-def auto_buy(score, panic):
-    if panic: return "🚀 150~200% (분할)"
-    if score <= 5: return "✅ 100%"
-    elif score <= 7: return "⚠️ 30%"
-    else: return "⛔ STOP"
-
 def send(msg):
-    try:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id":CHAT_ID,"text":msg}, timeout=10)
-    except Exception as e:
-        log(f"텔레그램 전송 오류: {e}", "error")
+    try: requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
+    except: pass
 
-# ==========================================
-# 🚀 메인 오퍼레이션
-# ==========================================
 def main():
-    log("데이터 수집 시작...")
+    log("📊 퀀텀 인사이트 리포트 생성 시작")
     
-    # 1. 뉴스 및 AI 분석
-    news = fetch_news()
-    ai_s, ai_r = get_ai(news)
-
-    # 2. 핵심 지수 수집 (1분 간격으로 최대 5분간 끈질기게 시도)
+    # 1. 핵심 지수 수집 (1분 간격 재시도)
     spy = safe(lambda:get_index("SP500"), retry=5, delay=60)
     qqq = safe(lambda:get_index("NASDAQCOM"), retry=5, delay=60)
+    kospi = safe(lambda:get_index("KOSPI"), retry=5, delay=60)
 
-    # 지수 실패 시 로그만 남기고 조용히 종료 (피로도 방지)
-    if not spy or not qqq:
-        log("⚠️ [데이터 미준비] FRED 데이터 갱신 대기 중. 알림 없이 종료합니다.", "info")
-        return 
+    if not spy or not qqq or not kospi:
+        log("⚠️ 지수 데이터 미준비로 종료", "info"); return
 
-    # 3. 기타 매크로 데이터 수집
+    # 2. 보조 데이터 수집
     vix_data = safe(lambda:get_series("VIXCLS"), retry=2, delay=5)
     dxy_data = safe(lambda:get_series("DTWEXBGS"), retry=2, delay=5)
-    fx_data = safe(lambda:get_series("DEXKOUS"), retry=2, delay=5)
-    rate_tuple = safe(get_rate_full, retry=2, delay=5)
     fx, fx_source = get_fx_final()
-    
-    # 4. 금 데이터 및 매크로 해석
     gold_data = get_gold()
-    gold_st = gold_signal(gold_data)
     
     spy_c, spy_p, spy_s = spy
-    qqq_c, qqq_p, qqq_s = qqq
     vix = vix_data[-1] if vix_data else 22
     dxy = dxy_data[-1] if dxy_data else 100
-
-    if fx_data:
-        fx1 = sum(fx_data[-252:]) / 252
-        fx2 = sum(fx_data[-500:]) / 500 if len(fx_data)>=500 else fx1
-    else:
-        fx1 = fx2 = fx
-
-    spy_g, qqq_g = gap(spy_c, spy_s), gap(qqq_c, qqq_s)
-    spy_m, qqq_m = momentum(spy_c, spy_p), momentum(qqq_c, qqq_p)
-
-    # 5. 최종 점수 및 상태 판별
-    score, panic = calc_total(spy_g, qqq_g, spy_m, qqq_m, vix, dxy, rate_tuple, ai_s)
-    st, act = get_stage(score, panic)
-    auto = auto_buy(score, panic)
     
-    gold_str = f"{gold_data[0]:.0f} ({pct(gold_data[0], gold_data[1]):+.2f}%) → {gold_st}" if gold_data else "수집 실패"
-    macro_insight_text = get_macro_insight(gold_data, dxy, spy_m)
-    meta_status = build_meta_status(fx_source, vix_data, dxy_data, spy, qqq, gold_data)
+    # 3. AI 심층 분석
+    news = fetch_news()
+    market_summary = f"S&P500: {spy_c}(200MA격차 {gap(spy_c, spy_s):.1f}%), VIX: {vix}, DXY: {dxy}, 환율: {fx}"
+    ai = get_ai_analysis(news, market_summary)
 
-    # 6. 메시지 구성
-    msg = f"""🤖 퀀텀 인사이트
+    # 4. 점수 및 상태 판별 (AI 0.5 가중치 적용)
+    total_score = calc_final_score(gap(spy_c, spy_s), pct(spy_c, spy_p), vix, dxy, ai['score'])
+    panic_signal = (vix > PANIC_VIX or pct(spy_c, spy_p) < PANIC_MOMENTUM)
+    st, act = get_stage(total_score, panic_signal)
 
-{ai_r}
+    # 5. 리포트 UI 구성
+    msg = f"""🤖 퀀텀 인사이트: 데일리 리포트
 
-상태: {st} ({int(score)}) → {act}
-자동매수: {auto}
+📌 요약: {ai['summary']}
 
-📊 시장
-SP500 {spy_c:.0f} ({pct(spy_c,spy_p):+.2f}%)
-→ {trend_status(spy_g)}
+⚠️ 리스크 요인:
+{ai['risk']}
 
-NASDAQ {qqq_c:.0f} ({pct(qqq_c,qqq_p):+.2f}%)
-→ {trend_status(qqq_g)}
-
-⚠️ 리스크
-VIX {vix:.2f}
-🪙 금 {gold_str}
-{macro_insight_text}
-
-💰 환율
-USD/KRW {fx:.0f} ({fx_source})
-(1Y {fx1:.0f} / 2Y {fx2:.0f})
+📍 전략 제안:
+{ai['strategy']}
 
 ━━━━━━━━━━━━━━━
-🛠 META
-{meta_status}
+상태: {st} ({total_score:.1f}) → {act}
+
+📊 시장 현황
+- S&P500: {spy_c:.0f} ({pct(spy_c, spy_p):+.2f}%)
+- NASDAQ: {qqq_c:.0f} ({pct(qqq_c, qqq_p):+.2f}%)
+- KOSPI: {kospi_c:.0f} ({pct(kospi_c, kospi_p):+.2f}%)
+- VIX: {vix:.2f} / 환율: {fx:.0f}
+- 금: {f"{gold_data[0]:.0f}" if gold_data else "수집지연"}
+
+🛠 META: {'✅ 정상' if not panic_signal else '🚨 패닉 감지'}
 """
-
-    # 7. 상태 비교 및 전송 여부 결정
+    # 6. 전송 및 상태 저장
     prev = load_state()
-    prev_score = prev.get("score")
-    prev_state = prev.get("state")
-
-    send_flag = False
-    if panic:
-        send_flag = True
-        log("💀 패닉 조건 충족 - 무조건 전송")
-    elif prev_state != st:
-        send_flag = True
-        log(f"상태 변화 감지: {prev_state} -> {st}")
-    elif prev_score is not None and abs(score - prev_score) >= 2:
-        send_flag = True
-        log(f"점수 유의미한 변화: {prev_score} -> {score}")
-
-    if send_flag:
-        send(msg)
-        save_state(score, st)
-        log("✅ 텔레그램 메시지 전송 및 상태 저장 완료")
-    else:
-        log(f"변화 없음 (현재 상태: {st}, 점수: {score}) - 전송 스킵")
+    # 데일리 리포트는 매일 아침 전송하되, 상태 변화가 클 때만 기록
+    send(msg)
+    save_state(total_score, st)
+    log("✅ 데일리 리포트 전송 완료")
 
 if __name__=="__main__":
     try: main()
-    except Exception as e: log(f"치명적 오류 발생: {e}", "error")
+    except Exception as e: log(f"치명적 오류: {e}", "error")
