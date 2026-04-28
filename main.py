@@ -14,20 +14,26 @@ DXY              = {"warn": 122, "danger": 126}
 SPY_DAILY_DROP   = -2.5
 SPY_TREND_GAP    = 3.0
 SCORE_MAX        = 15.0
-WEIGHT_PER_PCT   = 6.5
 HY_SPREAD_WARN   = 4.5
 HY_SPREAD_DANGER = 6.5
 FG_EXTREME_FEAR  = 10
 DXY_MOM_WARN     = 3.0
-DRAWDOWN_WARN    = -10.0   # 고점 대비 낙폭 경고
-DRAWDOWN_DANGER  = -20.0   # 고점 대비 낙폭 위험
-AI_WEIGHT        = 0.7     # AI 분석 비중 강화
+DRAWDOWN_WARN    = -10.0
+DRAWDOWN_DANGER  = -20.0
+AI_WEIGHT        = 0.7
 
 STATE_FILE  = "bot_state.json"
 RETRY_COUNT = 4
 RETRY_DELAY = 45
 
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+# ✅ NameError 수정: ECON_KEYWORDS 최상단 정의
+ECON_KEYWORDS = [
+    "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
+    "tariff", "trade", "bank", "earnings", "default", "yield", "debt",
+    "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업"
+]
 
 # ==========================================
 # 🔑 환경변수 검증
@@ -64,7 +70,7 @@ def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
         except requests.exceptions.HTTPError as e:
             log(f"⚠️ [{label}] {i+1}차 실패: {type(e).__name__}: {e}")
             if e.response is not None and e.response.status_code in (401, 403, 418):
-                log(f"⚡ [{label}] {e.response.status_code} → 재시도 불필요, 즉시 종료")
+                log(f"⚡ [{label}] {e.response.status_code} → 즉시 종료")
                 break
         except Exception as e:
             log(f"⚠️ [{label}] {i+1}차 실패: {type(e).__name__}: {e}")
@@ -109,7 +115,7 @@ def get_fred_series(series_id, days=1000, min_count=50):
     return values
 
 # ==========================================
-# 📈 Yahoo Finance 데이터
+# 📈 Yahoo Finance 지수 데이터
 # ==========================================
 def get_yahoo_closes(ticker, range_="2y"):
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}"
@@ -117,10 +123,11 @@ def get_yahoo_closes(ticker, range_="2y"):
     res.raise_for_status()
     closes = [v for v in res.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"] if v]
     if len(closes) < 50:
-        raise ValueError(f"{ticker}: Yahoo 데이터 부족 ({len(closes)}개)")
+        raise ValueError(f"{ticker}: 데이터 부족 ({len(closes)}개)")
     return closes
 
 def get_yahoo_stats(ticker, range_="2y"):
+    """(현재, 전일, 200일SMA, 52주고점) 반환"""
     closes = get_yahoo_closes(ticker, range_)
     count  = min(len(closes), 200)
     sma200 = sum(closes[-count:]) / count
@@ -128,31 +135,36 @@ def get_yahoo_stats(ticker, range_="2y"):
     return closes[-1], closes[-2], sma200, high52
 
 # ==========================================
-# 💱 환율
+# 💱 환율 — 네이버 우선 (토스 환전 기준)
 # ==========================================
 def get_fx_data():
     fx_c, source = None, "UNKNOWN"
+
+    # 1순위: 네이버
     try:
-        res = requests.get("https://finance.naver.com/marketindex/exchangeList.naver", headers=YAHOO_HEADERS, timeout=10)
+        res = requests.get("https://finance.naver.com/marketindex/exchangeList.naver",
+                           headers=YAHOO_HEADERS, timeout=10)
         res.raise_for_status()
         row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res.text, re.DOTALL)
         if row:
             m = re.search(r"<td class=\"sale\">([\d,]+\.?\d*)</td>", row.group())
             if m:
-                fx_c   = float(m.group(1).replace(",", ""))
-                source = "NAVER"
+                fx_c, source = float(m.group(1).replace(",", "")), "NAVER"
     except Exception as e:
         log(f"환율 네이버 실패: {e}")
 
+    # 2순위: Yahoo
     if fx_c is None:
         try:
-            res = requests.get("https://query2.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1d&range=5d", headers=YAHOO_HEADERS, timeout=10)
+            res = requests.get("https://query2.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1d&range=5d",
+                               headers=YAHOO_HEADERS, timeout=10)
             res.raise_for_status()
             closes = [v for v in res.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"] if v]
             fx_c, source = closes[-1], "YAHOO"
         except Exception as e:
             log(f"환율 Yahoo 실패: {e}")
 
+    # 이력: FRED DEXKOUS (1년/2년 평균용)
     history = None
     try:
         history = get_fred_series("DEXKOUS")
@@ -161,7 +173,8 @@ def get_fx_data():
     except Exception as e:
         log(f"환율 FRED 이력 실패: {e}")
 
-    if fx_c is None: fx_c, source = 1400.0, "DEFAULT"
+    if fx_c is None:
+        fx_c, source = 1400.0, "DEFAULT"
 
     if history and len(history) >= 504:
         fx_p  = history[-2]
@@ -173,17 +186,15 @@ def get_fx_data():
     return fx_c, fx_p, fx_1y, fx_2y, source
 
 # ==========================================
-# 🥇 금 데이터
+# 🥇 금 & RSI & 드로우다운
 # ==========================================
 def get_gold_data():
     closes = get_yahoo_closes("GC=F", "1y")
     return closes[-1], closes[-2], closes[-20], sum(closes[-min(len(closes), 252):]) / min(len(closes), 252)
 
-# ==========================================
-# 📈 RSI
-# ==========================================
 def calc_rsi_wilder(values, period=14):
-    if len(values) < period * 2: return None
+    if len(values) < period * 2:
+        return None
     deltas   = [values[i] - values[i-1] for i in range(1, len(values))]
     gains    = [max(d, 0) for d in deltas]
     losses   = [max(-d, 0) for d in deltas]
@@ -192,7 +203,8 @@ def calc_rsi_wilder(values, period=14):
     for i in range(period, len(gains)):
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    if avg_loss == 0: return 100.0
+    if avg_loss == 0:
+        return 100.0
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1)
 
 def get_rsi_label(rsi):
@@ -203,22 +215,20 @@ def get_rsi_label(rsi):
     if rsi <= 40:   return f"{rsi}  🔵 하단"
     return          f"{rsi}  ➖ 중립"
 
-# ==========================================
-# 📉 드로우다운
-# ==========================================
 def calc_drawdown(current, high52):
-    if not current or not high52 or high52 == 0: return None
+    if not current or not high52 or high52 == 0:
+        return None
     return (current - high52) / high52 * 100
 
 def get_drawdown_label(dd):
-    if dd is None:        return "산출 불가"
-    if dd <= DRAWDOWN_DANGER: return f"{dd:.1f}%  💀 대형 조정"
-    if dd <= DRAWDOWN_WARN:   return f"{dd:.1f}%  🔴 조정 구간"
-    if dd <= -5:              return f"{dd:.1f}%  🟠 소폭 하락"
-    return                    f"{dd:.1f}%  🟢 고점 근접"
+    if dd is None:             return "산출 불가"
+    if dd <= DRAWDOWN_DANGER:  return f"{dd:.1f}%  💀 대형 조정"
+    if dd <= DRAWDOWN_WARN:    return f"{dd:.1f}%  🔴 조정 구간"
+    if dd <= -5:               return f"{dd:.1f}%  🟠 소폭 하락"
+    return                     f"{dd:.1f}%  🟢 고점 근접"
 
 # ==========================================
-# 😨 공포탐욕지수
+# 😨 공포탐욕지수 — CNN → alternative.me 폴백
 # ==========================================
 CNN_HEADERS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -238,24 +248,21 @@ def _fg_label(score):
 
 def get_fear_greed():
     try:
-        res = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=CNN_HEADERS, timeout=10)
+        res = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+                           headers=CNN_HEADERS, timeout=10)
         res.raise_for_status()
         score = round(float(res.json()["fear_and_greed"]["score"]))
         return score, _fg_label(score)
     except Exception as e:
         log(f"F&G CNN 실패: {e} → alternative.me 시도")
 
-    try:
-        res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
-        res.raise_for_status()
-        score = round(float(res.json()["data"][0]["value"]))
-        return score, _fg_label(score) + " (alt)"
-    except Exception as e:
-        log(f"F&G alternative.me 실패: {e}")
-        return None, None
+    res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
+    res.raise_for_status()
+    score = round(float(res.json()["data"][0]["value"]))
+    return score, _fg_label(score) + " (alt)"
 
 # ==========================================
-# 🏦 기타 매크로
+# 🏦 매크로 지표
 # ==========================================
 def get_us10y():
     v = get_fred_series("DGS10", days=60, min_count=5)
@@ -266,33 +273,31 @@ def get_hy_spread():
     return v[-1], v[-2]
 
 def get_dxy_momentum(dxy_series):
-    if not dxy_series or len(dxy_series) < 21: return None
+    if not dxy_series or len(dxy_series) < 21:
+        return None
     return pct(dxy_series[-1], dxy_series[-21])
 
 # ==========================================
 # 📰 뉴스 키워드 추출
 # ==========================================
-ECON_KEYWORDS = [
-    "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
-    "tariff", "trade", "bank", "earnings", "default", "yield", "debt",
-    "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업"
-]
-
 def extract_news_keywords(entries, max_items=6):
     results = []
     for e in entries[:max_items]:
-        title     = e.title.strip()
-        summary   = getattr(e, "summary", "")
-        summary   = re.sub(r'<[^>]+>', '', summary)
+        title   = e.title.strip()
+        summary = getattr(e, "summary", "")
+        # HTML 태그·엔티티 제거
+        summary = re.sub(r'<[^>]+>', ' ', summary)
+        summary = re.sub(r'&\w+;', ' ', summary)
+        summary = re.sub(r'\s+', ' ', summary).strip()
         sentences = re.split(r'[.!?]', summary)
         key_sents = [s.strip() for s in sentences
                      if any(kw.lower() in s.lower() for kw in ECON_KEYWORDS)]
-        context   = " / ".join(key_sents[:2]) if key_sents else summary[:80]
+        context = " / ".join(key_sents[:2]) if key_sents else summary[:80]
         results.append(f"• {title}  [{context}]")
     return "\n".join(results)
 
 # ==========================================
-# 🧠 AI 분석 (핵심 리스크 3개 요청으로 수정)
+# 🧠 AI 분석
 # ==========================================
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
     prompt = f"""
@@ -326,62 +331,85 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
     data = json.loads(res.choices[0].message.content.strip())
     data["score"] = max(-2, min(2, float(data.get("score", 0))))
     data.setdefault("market_phase", "분석 중")
-    data.setdefault("top_risks",    ["데이터 부족", "재시도", "-"])
+    data.setdefault("top_risks",    ["-", "-", "-"])
     data.setdefault("opportunity",  "-")
-    data.setdefault("strategy",      "관망")
+    data.setdefault("strategy",     "관망")
     return data
 
 # ==========================================
 # 🎯 종합 위험 점수
+# ✅ KOSPI 점수 반영 추가 (제미나이 피드백)
 # ==========================================
-def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_score, hy_spread, spy_dd):
-    if spy[0] == 0: return 2.0
+def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
+                    us10y, fg_score, hy_spread, spy_dd):
+    if spy[0] == 0:
+        return 2.0
     s   = 0.0
     dxy = dxy_series[-1] if dxy_series else 118.0
 
+    # S&P500 신호
     if spy[0] > 0:
         if gap(spy[0], spy[2]) < -SPY_TREND_GAP: s += 2.0
-        if pct(spy[0], spy[1])   < SPY_DAILY_DROP:  s += 2.5
+        if pct(spy[0], spy[1]) < SPY_DAILY_DROP:  s += 2.5
+
+    # NASDAQ 신호
     if qqq[0] > 0 and gap(qqq[0], qqq[2]) < -SPY_TREND_GAP:
         s += 1.5
 
+    # ✅ KOSPI 신호 (한국 시장 특성: -2%도 경계)
+    c_kos = kospi[0] if kospi else 0
+    sma_kos = kospi[2] if kospi else 0
+    if c_kos > 0 and sma_kos > 0:
+        kos_gap = gap(c_kos, sma_kos)
+        if kos_gap < -4.0:   s += 1.5   # 심각한 하락
+        elif kos_gap < -2.0: s += 1.0   # 경계 수준
+
+    # 드로우다운
     if spy_dd is not None:
         if spy_dd <= DRAWDOWN_DANGER: s += 2.5
         elif spy_dd <= DRAWDOWN_WARN: s += 1.0
 
+    # 환율
     fx_c, fx_p, fx_1y, fx_2y, _ = fx_data
     fg_2y = gap(fx_c, fx_2y)
     if fg_2y > FX_GAP["danger"]:    s += 2.0
     elif fg_2y > FX_GAP["caution"]: s += 1.0
     if pct(fx_c, fx_p) > 1.5:       s += 1.5
 
+    # VIX
     if vix > VIX["panic"]:    s += 4.0
     elif vix > VIX["danger"]: s += 2.0
     elif vix > VIX["warn"]:   s += 1.0
 
+    # DXY 절대값 + 속도
     if dxy > DXY["danger"]:    s += 1.5
     elif dxy > DXY["warn"]:    s += 0.5
     dxy_mom = get_dxy_momentum(dxy_series)
     if dxy_mom and dxy_mom > DXY_MOM_WARN:
         s += 2.0 if dxy_mom > DXY_MOM_WARN * 1.5 else 1.0
 
+    # 국채금리
     if us10y and us10y[0] and us10y[1]:
         rc = us10y[0] - us10y[1]
         if rc > 0.2:   s += 2.0
         elif rc > 0.1: s += 1.0
 
+    # 하이일드 스프레드
     if hy_spread and hy_spread[0]:
         hys = hy_spread[0]
-        if hys > HY_SPREAD_DANGER:   s += 3.0
-        elif hys > HY_SPREAD_WARN:    s += 1.5
+        if hys > HY_SPREAD_DANGER:  s += 3.0
+        elif hys > HY_SPREAD_WARN:  s += 1.5
         if hy_spread[1] and (hys - hy_spread[1]) > 0.3:
             s += 1.0
 
+    # 공포탐욕
     if fg_score is not None:
-        if fg_score > 80:                  s += 1.0
-        elif fg_score < FG_EXTREME_FEAR:   s -= 1.5
+        if fg_score > 80:               s += 1.0
+        elif fg_score < FG_EXTREME_FEAR: s -= 1.5
 
+    # AI 보정
     s += ai_score * AI_WEIGHT
+
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
@@ -400,10 +428,10 @@ def get_macro_comment(gold, dxy, spy_daily, us10y, hy_spread, dxy_mom):
     comments = []
     if gold:
         g = pct(gold[0], gold[2])
-        if g > 2 and dxy > DXY["warn"]:   comments.append("금·달러 동반↑ → 안전자산 쏠림 🚨")
-        elif g > 2 and spy_daily > 0:      comments.append("금·주식 동반↑ → 유동성 장세 💸")
-        elif g < -2 and spy_daily > 0:     comments.append("금↓·주식↑ → Risk-On 🟢")
-        elif g < -2 and spy_daily < -2:    comments.append("전방위 패닉셀 💀")
+        if g > 2 and dxy > DXY["warn"]:  comments.append("금·달러 동반↑ → 안전자산 쏠림 🚨")
+        elif g > 2 and spy_daily > 0:    comments.append("금·주식 동반↑ → 유동성 장세 💸")
+        elif g < -2 and spy_daily > 0:   comments.append("금↓·주식↑ → Risk-On 🟢")
+        elif g < -2 and spy_daily < -2:  comments.append("전방위 패닉셀 💀")
     if us10y and us10y[0]:
         if us10y[0] > 4.8:   comments.append(f"10Y {us10y[0]:.2f}% → 고금리 부담 ⚠️")
         elif us10y[0] < 3.8: comments.append(f"10Y {us10y[0]:.2f}% → 금리 완화 기대 🟢")
@@ -421,8 +449,9 @@ def format_index(c, p, sma, _=None):
 # 🚀 메인
 # ==========================================
 def main():
-    log(f"📊 퀀텀 v4 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
+    log(f"📊 퀀텀 v5 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
 
+    # 데이터 수집
     spy_raw   = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")   or (0, 0, 0, 0)
     qqq_raw   = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")   or (0, 0, 0, 0)
     kospi_raw = safe(lambda: get_yahoo_stats("^KS11"), "KOSPI") or (0, 0, 0, 0)
@@ -439,32 +468,44 @@ def main():
     dxy_mom = get_dxy_momentum(dxy_series)
 
     spy_closes = safe(lambda: get_yahoo_closes("^GSPC", "2y"), "RSI소스")
-    rsi        = calc_rsi_wilder(spy_closes) if spy_closes else None
-    spy_dd     = calc_drawdown(spy_raw[0], spy_raw[3]) if spy_raw[0] else None
+    rsi    = calc_rsi_wilder(spy_closes) if spy_closes else None
+    spy_dd = calc_drawdown(spy_raw[0], spy_raw[3]) if spy_raw[0] else None
 
+    # 뉴스
     try:
-        feed = feedparser.parse("https://finance.yahoo.com/news/rssindex")
+        feed         = feedparser.parse("https://finance.yahoo.com/news/rssindex")
         news_context = extract_news_keywords(feed.entries)
-    except Exception as e: news_context = "뉴스 수집 실패"
+    except Exception as e:
+        log(f"뉴스 수집 실패: {e}")
+        news_context = "뉴스 수집 실패"
 
+    # AI 분석
     market_summary = {
-        "SP500":     {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2), "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
-        "NASDAQ":    {"현재": qqq_raw[0], "전일대비%": round(pct(qqq_raw[0], qqq_raw[1]), 2)},
-        "VIX":       vix,
-        "DXY":       {"현재": dxy, "20일모멘텀%": round(dxy_mom, 2) if dxy_mom else None},
-        "USD_KRW":   fx_data[0],
-        "US10Y금리": us10y[0],
+        "SP500":      {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2),
+                       "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
+        "NASDAQ":     {"현재": qqq_raw[0], "전일대비%": round(pct(qqq_raw[0], qqq_raw[1]), 2)},
+        "KOSPI":      {"현재": kospi_raw[0], "200일선대비%": round(gap(kospi_raw[0], kospi_raw[2]), 2) if kospi_raw[0] else None},
+        "VIX":        vix,
+        "DXY":        {"현재": dxy, "20일모멘텀%": round(dxy_mom, 2) if dxy_mom else None},
+        "USD_KRW":    fx_data[0],
+        "US10Y금리":  us10y[0],
         "HY스프레드": hy_spread[0] if hy_spread else None,
         "공포탐욕":   fg_score,
         "금현재가":   gold[0] if gold else None,
-        "RSI_SP500": rsi,
+        "RSI_SP500":  rsi,
     }
-    try: ai = get_ai_analysis(news_context, market_summary)
-    except Exception as e: ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["-", "-", "-"], "opportunity": "-", "strategy": "관망"}
+    try:
+        ai = get_ai_analysis(news_context, market_summary)
+    except Exception as e:
+        log(f"AI 분석 실패: {e}")
+        ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["-", "-", "-"], "opportunity": "-", "strategy": "관망"}
 
-    total_score = calc_risk_score(spy_raw, qqq_raw, fx_data, vix, dxy_series, ai["score"], us10y, fg_score, hy_spread, spy_dd)
-    
-    # ── 비중 & 국면 결정 (30% 단계별 매도) ──
+    # 점수 & 국면
+    total_score = calc_risk_score(
+        spy_raw, qqq_raw, kospi_raw, fx_data, vix, dxy_series,
+        ai["score"], us10y, fg_score, hy_spread, spy_dd
+    )
+
     if total_score < 3:
         stage_label, weight = "🟢 공격적 매수", 100
         stage_action = "주식 비중 최대 유지 및 수익 극대화"
@@ -481,40 +522,60 @@ def main():
         stage_label, weight = "🔴 위험 회피", 0
         stage_action = "전량 대피 및 폭풍우 관망"
 
-    is_panic = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
+    is_panic        = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
+    is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
+
     if is_panic:
-        stage_label = "💀 패닉 구간"
+        stage_label  = "💀 패닉 구간"
         stage_action = "현금 투입 시작 (평소 분할매수액의 2배 증액)"
 
-    prev = load_state()
-    prev_score = prev.get("score", total_score)
-    prev_stage = prev.get("stage", stage_label)
-    score_diff = total_score - prev_score
-    diff_str = f"{score_diff:+.1f} {arrow(score_diff)}"
+    # 전일 비교
+    prev        = load_state()
+    prev_score  = prev.get("score", total_score)
+    prev_stage  = prev.get("stage", stage_label)
+    score_diff  = total_score - prev_score
+    diff_str    = f"{score_diff:+.1f} {arrow(score_diff)}"
 
-    stage_change_alert = f"\n🔔 국면 변화 감지\n   {prev_stage} → {stage_label}\n" if prev_stage != stage_label else ""
-    extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 분할매수 검토 구간\n" if is_extreme_fear else ""
-    bullish_suffix = "  🔥 강세장" if (spy_raw[0] > 0 and gap(spy_raw[0], spy_raw[2]) > 3 and qqq_raw[0] > 0 and gap(qqq_raw[0], qqq_raw[2]) > 3) else ""
+    # ✅ 국면 변화 알림 — 메시지 최상단 배치 (제미나이 피드백)
+    stage_change_alert = (
+        f"📢📢 국면 변화 감지!\n   {prev_stage}  →  {stage_label}\n━━━━━━━━━━━━━━━━━━\n"
+        if prev_stage != stage_label else ""
+    )
+    extreme_fear_alert = (
+        f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 분할매수 검토 구간\n"
+        if is_extreme_fear else ""
+    )
+    bullish_suffix = (
+        "  🔥 강세장"
+        if spy_raw[0] > 0 and gap(spy_raw[0], spy_raw[2]) > 3
+        and qqq_raw[0] > 0 and gap(qqq_raw[0], qqq_raw[2]) > 3
+        else ""
+    )
 
+    # 표시용 가공
     fx_c, fx_p, fx_1y, fx_2y, fx_src = fx_data
     fx_2y_gap = gap(fx_c, fx_2y)
-    fx_status = ("⚠️ 역사적 고점권" if fx_2y_gap > FX_GAP["danger"] else "🟠 주의 수준" if fx_2y_gap > FX_GAP["caution"] else "✅ 정상 범위")
-    dxy_status = "✅" if dxy < DXY["warn"] else ("⚠️" if dxy < DXY["danger"] else "🚨")
-    dxy_mom_str = (f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom > DXY_MOM_WARN else ''}" if dxy_mom else "")
+    fx_status  = ("⚠️ 역사적 고점권" if fx_2y_gap > FX_GAP["danger"]
+                  else "🟠 주의 수준" if fx_2y_gap > FX_GAP["caution"]
+                  else "✅ 정상 범위")
+    dxy_status  = "✅" if dxy < DXY["warn"] else ("⚠️" if dxy < DXY["danger"] else "🚨")
+    dxy_mom_str = (f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom > DXY_MOM_WARN else ''}"
+                   if dxy_mom else "")
 
     if hy_spread and hy_spread[0]:
-        hys = hy_spread[0]
-        hy_chg = (hys - hy_spread[1]) if hy_spread[1] else 0
+        hys     = hy_spread[0]
+        hy_chg  = (hys - hy_spread[1]) if hy_spread[1] else 0
         hy_icon = "🔴" if hys > HY_SPREAD_DANGER else ("🟠" if hys > HY_SPREAD_WARN else "🟢")
         hy_str  = f"{hys:.2f}%  {hy_icon}  ({hy_chg:+.2f}%p)"
-    else: hy_str = "지연"
+    else:
+        hy_str = "지연"
 
     now_str = datetime.now().strftime("%Y.%m.%d %H:%M")
-    
-    # ── 메시지 구성 (핵심 리스크 3개 반영) ──
-    msg = f"""🤖 퀀텀 인사이트 v4  |  {now_str}
+
+    # 메시지 — 국면 변화 알림이 맨 위
+    msg = f"""🤖 퀀텀 인사이트 v5  |  {now_str}
 ━━━━━━━━━━━━━━━━━━
-📌 시장 국면
+{stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
 
 ⚠️ 핵심 리스크
@@ -527,7 +588,7 @@ def main():
 
 🧭 대응 전략
 {ai['strategy']}
-{stage_change_alert}{extreme_fear_alert}
+{extreme_fear_alert}
 ━━━━━━━━━━━━━━━━━━
 📊 위험 점수: {total_score:.1f} / 15.0  ({diff_str} vs 전일)
 🎯 주식 권장: {weight}%  |  현금: {100-weight}%
@@ -558,15 +619,23 @@ RSI(S&P) : {get_rsi_label(rsi)}
 ━━━━━━━━━━━━━━━━━━
 💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]) if spy_raw[0] else 0, us10y, hy_spread, dxy_mom)}
 
-🛠 시스템: {"⚠️ 패닉 대응 모드 가동" if is_panic else "✅ 정상"}
+🛠 시스템: {"🚨 패닉 감지" if is_panic else "✅ 정상"}
 """
+
     try:
-        resp = requests.post(f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage", data={"chat_id": ENV["CHAT_ID"], "text": msg}, timeout=15)
+        resp = requests.post(
+            f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
+            data={"chat_id": ENV["CHAT_ID"], "text": msg},
+            timeout=15,
+        )
         resp.raise_for_status()
         log("✅ 전송 완료")
-    except Exception as e: log(f"❌ 전송 실패: {e}")
+    except Exception as e:
+        log(f"❌ 전송 실패: {e}")
 
     save_state(total_score, stage_label)
+    log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
+
 
 if __name__ == "__main__":
     main()
