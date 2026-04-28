@@ -21,7 +21,7 @@ FG_EXTREME_FEAR  = 10
 DXY_MOM_WARN     = 3.0
 DRAWDOWN_WARN    = -10.0   # 고점 대비 낙폭 경고
 DRAWDOWN_DANGER  = -20.0   # 고점 대비 낙폭 위험
-AI_WEIGHT        = 0.35    # GPT 피드백 반영: 0.6 → 0.35
+AI_WEIGHT        = 0.5     # AI 분석 비중 강화 (0.35 -> 0.7 -> 0.5 중간값)
 
 STATE_FILE  = "bot_state.json"
 RETRY_COUNT = 4
@@ -63,7 +63,6 @@ def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
                 return res
         except requests.exceptions.HTTPError as e:
             log(f"⚠️ [{label}] {i+1}차 실패: {type(e).__name__}: {e}")
-            # 418(봇 차단)·401·403은 재시도해도 의미없음 → 즉시 포기
             if e.response is not None and e.response.status_code in (401, 403, 418):
                 log(f"⚡ [{label}] {e.response.status_code} → 재시도 불필요, 즉시 종료")
                 break
@@ -95,7 +94,6 @@ def save_state(score, stage):
 # 📊 FRED 데이터
 # ==========================================
 def get_fred_series(series_id, days=1000, min_count=50):
-    """min_count: 단기 시리즈는 낮게 설정 가능 (예: DGS10 → 10)"""
     url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
         "series_id": series_id,
@@ -111,10 +109,7 @@ def get_fred_series(series_id, days=1000, min_count=50):
     return values
 
 # ==========================================
-# 📈 Yahoo Finance 지수 데이터
-# ✅ FRED SP500·KOSPI·NASDAQCOM 대체
-#    - 실시간에 가까운 종가
-#    - 주말/공휴일 자동 제외 → RSI 왜곡 없음
+# 📈 Yahoo Finance 데이터
 # ==========================================
 def get_yahoo_closes(ticker, range_="2y"):
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}"
@@ -126,7 +121,6 @@ def get_yahoo_closes(ticker, range_="2y"):
     return closes
 
 def get_yahoo_stats(ticker, range_="2y"):
-    """(현재, 전일, 200일평균, 52주최고) 반환"""
     closes = get_yahoo_closes(ticker, range_)
     count  = min(len(closes), 200)
     sma200 = sum(closes[-count:]) / count
@@ -134,17 +128,12 @@ def get_yahoo_stats(ticker, range_="2y"):
     return closes[-1], closes[-2], sma200, high52
 
 # ==========================================
-# 💱 환율 — 네이버 우선 (토스 환전 기준)
+# 💱 환율
 # ==========================================
 def get_fx_data():
     fx_c, source = None, "UNKNOWN"
-
-    # 1순위: 네이버 (토스 환전 기준)
     try:
-        res = requests.get(
-            "https://finance.naver.com/marketindex/exchangeList.naver",
-            headers=YAHOO_HEADERS, timeout=10
-        )
+        res = requests.get("https://finance.naver.com/marketindex/exchangeList.naver", headers=YAHOO_HEADERS, timeout=10)
         res.raise_for_status()
         row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res.text, re.DOTALL)
         if row:
@@ -155,20 +144,15 @@ def get_fx_data():
     except Exception as e:
         log(f"환율 네이버 실패: {e}")
 
-    # 2순위: Yahoo Finance
     if fx_c is None:
         try:
-            res = requests.get(
-                "https://query2.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1d&range=5d",
-                headers=YAHOO_HEADERS, timeout=10
-            )
+            res = requests.get("https://query2.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1d&range=5d", headers=YAHOO_HEADERS, timeout=10)
             res.raise_for_status()
             closes = [v for v in res.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"] if v]
             fx_c, source = closes[-1], "YAHOO"
         except Exception as e:
             log(f"환율 Yahoo 실패: {e}")
 
-    # 이력 데이터: FRED DEXKOUS (평균 계산용, 현재값 fallback)
     history = None
     try:
         history = get_fred_series("DEXKOUS")
@@ -177,8 +161,7 @@ def get_fx_data():
     except Exception as e:
         log(f"환율 FRED 이력 실패: {e}")
 
-    if fx_c is None:
-        fx_c, source = 1400.0, "DEFAULT"
+    if fx_c is None: fx_c, source = 1400.0, "DEFAULT"
 
     if history and len(history) >= 504:
         fx_p  = history[-2]
@@ -197,12 +180,10 @@ def get_gold_data():
     return closes[-1], closes[-2], closes[-20], sum(closes[-min(len(closes), 252):]) / min(len(closes), 252)
 
 # ==========================================
-# 📈 RSI — 와일더(Wells Wilder) EMA 방식
-#    Yahoo 데이터 기반 → FRED 주말 왜곡 없음
+# 📈 RSI
 # ==========================================
 def calc_rsi_wilder(values, period=14):
-    if len(values) < period * 2:
-        return None
+    if len(values) < period * 2: return None
     deltas   = [values[i] - values[i-1] for i in range(1, len(values))]
     gains    = [max(d, 0) for d in deltas]
     losses   = [max(-d, 0) for d in deltas]
@@ -211,8 +192,7 @@ def calc_rsi_wilder(values, period=14):
     for i in range(period, len(gains)):
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    if avg_loss == 0:
-        return 100.0
+    if avg_loss == 0: return 100.0
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1)
 
 def get_rsi_label(rsi):
@@ -224,15 +204,14 @@ def get_rsi_label(rsi):
     return          f"{rsi}  ➖ 중립"
 
 # ==========================================
-# 📉 드로우다운 (고점 대비 낙폭)
+# 📉 드로우다운
 # ==========================================
 def calc_drawdown(current, high52):
-    if not current or not high52 or high52 == 0:
-        return None
+    if not current or not high52 or high52 == 0: return None
     return (current - high52) / high52 * 100
 
 def get_drawdown_label(dd):
-    if dd is None:       return "산출 불가"
+    if dd is None:        return "산출 불가"
     if dd <= DRAWDOWN_DANGER: return f"{dd:.1f}%  💀 대형 조정"
     if dd <= DRAWDOWN_WARN:   return f"{dd:.1f}%  🔴 조정 구간"
     if dd <= -5:              return f"{dd:.1f}%  🟠 소폭 하락"
@@ -240,8 +219,6 @@ def get_drawdown_label(dd):
 
 # ==========================================
 # 😨 공포탐욕지수
-#    1순위: CNN (브라우저 헤더 강화)
-#    2순위: alternative.me (봇 차단 없음, 키 불필요)
 # ==========================================
 CNN_HEADERS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -260,49 +237,40 @@ def _fg_label(score):
     return           "극단적 탐욕 🤑"
 
 def get_fear_greed():
-    # 1순위: CNN (브라우저 헤더)
     try:
-        res = requests.get(
-            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
-            headers=CNN_HEADERS, timeout=10
-        )
+        res = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=CNN_HEADERS, timeout=10)
         res.raise_for_status()
         score = round(float(res.json()["fear_and_greed"]["score"]))
         return score, _fg_label(score)
     except Exception as e:
         log(f"F&G CNN 실패: {e} → alternative.me 시도")
 
-    # 2순위: alternative.me (봇 차단 없음, 키 불필요)
-    res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
-    res.raise_for_status()
-    score = round(float(res.json()["data"][0]["value"]))
-    return score, _fg_label(score) + " (alt)"
+    try:
+        res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
+        res.raise_for_status()
+        score = round(float(res.json()["data"][0]["value"]))
+        return score, _fg_label(score) + " (alt)"
+    except Exception as e:
+        log(f"F&G alternative.me 실패: {e}")
+        return None, None
 
 # ==========================================
-# 🏦 미 10년물 금리
-#    ✅ min_count=5 로 낮춤 (30일 fetch → 20개 내외 정상)
+# 🏦 기타 매크로
 # ==========================================
 def get_us10y():
     v = get_fred_series("DGS10", days=60, min_count=5)
     return v[-1], v[-2]
 
-# ==========================================
-# 📉 하이일드 채권 스프레드
-# ==========================================
 def get_hy_spread():
     v = get_fred_series("BAMLH0A0HYM2", days=60, min_count=5)
     return v[-1], v[-2]
 
-# ==========================================
-# 💵 DXY 모멘텀 (20일 속도)
-# ==========================================
 def get_dxy_momentum(dxy_series):
-    if not dxy_series or len(dxy_series) < 21:
-        return None
+    if not dxy_series or len(dxy_series) < 21: return None
     return pct(dxy_series[-1], dxy_series[-21])
 
 # ==========================================
-# 📰 뉴스 키워드 추출
+# 📰 뉴스 키워드 추출 (HTML 태그 제거 추가)
 # ==========================================
 ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
@@ -315,6 +283,7 @@ def extract_news_keywords(entries, max_items=6):
     for e in entries[:max_items]:
         title     = e.title.strip()
         summary   = getattr(e, "summary", "")
+        summary   = re.sub(r'<[^>]+>', '', summary) # HTML 태그 제거
         sentences = re.split(r'[.!?]', summary)
         key_sents = [s.strip() for s in sentences
                      if any(kw.lower() in s.lower() for kw in ECON_KEYWORDS)]
@@ -356,18 +325,13 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
     )
     data = json.loads(res.choices[0].message.content.strip())
     data["score"] = max(-2, min(2, float(data.get("score", 0))))
-    data.setdefault("market_phase", "분석 중")
-    data.setdefault("top_risks",    ["데이터 부족", "재시도"])
-    data.setdefault("opportunity",  "-")
-    data.setdefault("strategy",     "관망")
     return data
 
 # ==========================================
-# 🎯 종합 위험 점수
+# 🎯 종합 위험 점수 (코스피 점수 반영 제외)
 # ==========================================
 def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_score, hy_spread, spy_dd):
-    if spy[0] == 0:
-        return 2.0
+    if spy[0] == 0: return 2.0
     s   = 0.0
     dxy = dxy_series[-1] if dxy_series else 118.0
 
@@ -421,16 +385,16 @@ def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_scor
 
     # 공포탐욕
     if fg_score is not None:
-        if fg_score > 80:                 s += 1.0
-        elif fg_score < FG_EXTREME_FEAR:  s -= 1.5   # 역발상: 극단 공포는 기회
+        if fg_score > 80:                  s += 1.0
+        elif fg_score < FG_EXTREME_FEAR:   s -= 1.5
 
-    # AI 보정 (0.35: 뉴스 노이즈 영향 최소화)
+    # AI 보정 (0.5: 매크로 해석력 강화)
     s += ai_score * AI_WEIGHT
 
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 📋 보조 분석
+# 📋 보조 분석 로직
 # ==========================================
 def get_gold_signal(gold):
     if not gold: return "지연"
@@ -468,8 +432,6 @@ def format_index(c, p, sma, _=None):
 def main():
     log(f"📊 퀀텀 v4 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
 
-    # ── 데이터 수집 ──────────────────────────────
-    # ✅ SP500, NASDAQ, KOSPI → Yahoo Finance 통일 (FRED 지연·ID 오류 해결)
     spy_raw   = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")   or (0, 0, 0, 0)
     qqq_raw   = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")   or (0, 0, 0, 0)
     kospi_raw = safe(lambda: get_yahoo_stats("^KS11"), "KOSPI") or (0, 0, 0, 0)
@@ -479,33 +441,23 @@ def main():
     hy_spread = safe(lambda: get_hy_spread(),          "HY")
     fg_score, fg_label = safe(lambda: get_fear_greed(), "F&G") or (None, None)
 
-    # ✅ VIX·DXY만 FRED 유지 (대체 소스 없음)
     vix_series = safe(lambda: get_fred_series("VIXCLS"),   "VIX")
     dxy_series = safe(lambda: get_fred_series("DTWEXBGS"), "DXY")
-
     vix     = vix_series[-1] if vix_series else 22.0
     dxy     = dxy_series[-1] if dxy_series else 118.0
     dxy_mom = get_dxy_momentum(dxy_series)
 
-    # ✅ RSI → Yahoo SPY 종가 기반 (FRED 주말 왜곡 제거)
     spy_closes = safe(lambda: get_yahoo_closes("^GSPC", "2y"), "RSI소스")
     rsi        = calc_rsi_wilder(spy_closes) if spy_closes else None
+    spy_dd     = calc_drawdown(spy_raw[0], spy_raw[3]) if spy_raw[0] else None
 
-    # ✅ 드로우다운
-    spy_dd = calc_drawdown(spy_raw[0], spy_raw[3]) if spy_raw[0] else None
-
-    # ── 뉴스 수집 ───────────────────────────────
     try:
-        feed         = feedparser.parse("https://finance.yahoo.com/news/rssindex")
+        feed = feedparser.parse("https://finance.yahoo.com/news/rssindex")
         news_context = extract_news_keywords(feed.entries)
-    except Exception as e:
-        log(f"뉴스 수집 실패: {e}")
-        news_context = "뉴스 수집 실패"
+    except: news_context = "뉴스 수집 실패"
 
-    # ── AI 분석 ─────────────────────────────────
     market_summary = {
-        "SP500":     {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2),
-                      "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
+        "SP500":     {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2), "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
         "NASDAQ":    {"현재": qqq_raw[0], "전일대비%": round(pct(qqq_raw[0], qqq_raw[1]), 2)},
         "VIX":       vix,
         "DXY":       {"현재": dxy, "20일모멘텀%": round(dxy_mom, 2) if dxy_mom else None},
@@ -516,137 +468,74 @@ def main():
         "금현재가":   gold[0] if gold else None,
         "RSI_SP500": rsi,
     }
-    try:
-        ai = get_ai_analysis(news_context, market_summary)
-    except Exception as e:
-        log(f"AI 분석 실패: {e}")
-        ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["분석 불가"], "opportunity": "-", "strategy": "관망"}
+    try: ai = get_ai_analysis(news_context, market_summary)
+    except: ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["분석 불가"], "opportunity": "-", "strategy": "관망"}
 
-    # ── 점수 & 국면 ──────────────────────────────
-    total_score = calc_risk_score(spy_raw, qqq_raw, fx_data, vix, dxy_series,
-                                  ai["score"], us10y, fg_score, hy_spread, spy_dd)
+    total_score = calc_risk_score(spy_raw, qqq_raw, fx_data, vix, dxy_series, ai["score"], us10y, fg_score, hy_spread, spy_dd)
     weight = round(max(0, min(100, 100 - total_score * WEIGHT_PER_PCT)))
 
-    is_panic        = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
+    is_panic = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
-    stages = [
-        ("🟢 공격적 매수", "주식 80% 이상"),
-        ("🔵 적극적 유지", "주식 60~80%"),
-        ("🟡 중립 관망",   "주식 40~60%"),
-        ("🟠 방어적 축소", "주식 20~40%"),
-        ("🔴 위험 회피",   "주식 20% 이하"),
-    ]
-    if is_panic:
-        stage_label, stage_action = "💀 패닉 구간", "현금 확보 + 분할매수 대기"
-    else:
-        stage_label, stage_action = stages[min(4, int(total_score // 3))]
+    stages = [("🟢 공격적 매수", "주식 80% 이상"), ("🔵 적극적 유지", "주식 60~80%"), ("🟡 중립 관망", "주식 40~60%"), ("🟠 방어적 축소", "주식 20~40%"), ("🔴 위험 회피", "주식 20% 이하")]
+    if is_panic: stage_label, stage_action = "💀 패닉 구간", "현금 확보 + 분할매수 대기"
+    else: stage_label, stage_action = stages[min(4, int(total_score // 3))]
 
-    # ── 전일 비교 & 국면 변화 감지 ──────────────
-    prev        = load_state()
-    prev_score  = prev.get("score", total_score)
-    prev_stage  = prev.get("stage", stage_label)
-    score_diff  = total_score - prev_score
-    diff_str    = f"{score_diff:+.1f} {arrow(score_diff)}"
+    prev = load_state()
+    prev_stage = prev.get("stage", stage_label)
+    score_diff = total_score - prev.get("score", total_score)
+    diff_str = f"{score_diff:+.1f} {arrow(score_diff)}"
 
-    # ✅ 국면 변화 알림 (GPT 피드백 반영)
-    stage_change_alert = ""
-    if prev_stage and prev_stage != stage_label:
-        stage_change_alert = f"\n🔔 국면 변화 감지\n   {prev_stage} → {stage_label}\n"
+    # 알림 섹션 강화
+    alerts = []
+    if prev_stage != stage_label: alerts.append(f"📢 국면 변화: {prev_stage} → {stage_label}")
+    if is_extreme_fear: alerts.append(f"😱 극단적 공포 감지 (F&G={fg_score}) → 분할매수 검토")
+    alert_msg = "\n" + "\n".join(alerts) + "\n" if alerts else ""
 
-    # ── 강세장 여부 ──────────────────────────────
-    bullish_suffix = ""
-    if spy_raw[0] > 0 and qqq_raw[0] > 0:
-        if gap(spy_raw[0], spy_raw[2]) > 3 and gap(qqq_raw[0], qqq_raw[2]) > 3:
-            bullish_suffix = "  🔥 강세장"
-
-    # ── 표시용 가공 ──────────────────────────────
-    fx_c, fx_p, fx_1y, fx_2y, fx_src = fx_data
+    fx_c, _, fx_1y, fx_2y, fx_src = fx_data
     fx_2y_gap = gap(fx_c, fx_2y)
-    fx_status = ("⚠️ 역사적 고점권" if fx_2y_gap > FX_GAP["danger"]
-                 else "🟠 주의 수준" if fx_2y_gap > FX_GAP["caution"]
-                 else "✅ 정상 범위")
-
-    dxy_status  = "✅" if dxy < DXY["warn"] else ("⚠️" if dxy < DXY["danger"] else "🚨")
-    dxy_mom_str = (f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom > DXY_MOM_WARN else ''}"
-                   if dxy_mom else "")
+    fx_status = "⚠️ 역사적 고점" if fx_2y_gap > FX_GAP["danger"] else "🟠 주의" if fx_2y_gap > FX_GAP["caution"] else "✅ 정상"
+    dxy_status = "✅" if dxy < DXY["warn"] else "⚠️" if dxy < DXY["danger"] else "🚨"
 
     if hy_spread and hy_spread[0]:
-        hys    = hy_spread[0]
-        hy_chg = (hys - hy_spread[1]) if hy_spread[1] else 0
-        hy_icon = "🔴" if hys > HY_SPREAD_DANGER else ("🟠" if hys > HY_SPREAD_WARN else "🟢")
-        hy_str  = f"{hys:.2f}%  {hy_icon}  ({hy_chg:+.2f}%p)"
-    else:
-        hy_str = "지연"
+        hy_str = f"{hy_spread[0]:.2f}% {'🔴' if hy_spread[0] > HY_SPREAD_DANGER else '🟠' if hy_spread[0] > HY_SPREAD_WARN else '🟢'}"
+    else: hy_str = "지연"
 
-    extreme_fear_alert = (f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 분할매수 검토 구간\n"
-                          if is_extreme_fear else "")
-
-    # ── 메시지 ───────────────────────────────────
-    now_str = datetime.now().strftime("%Y.%m.%d %H:%M")
-    msg = f"""🤖 퀀텀 인사이트 v4  |  {now_str}
+    msg = f"""🤖 퀀텀 인사이트 v4 | {datetime.now().strftime("%Y.%m.%d %H:%M")}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 시장 국면
-{ai['market_phase']}{bullish_suffix}
+📌 시장 국면: {ai['market_phase']} {alert_msg}
+⚠️ 리스크: {', '.join(ai['top_risks'])}
+💡 기회: {ai['opportunity']}
+🧭 전략: {ai['strategy']}
 
-⚠️ 핵심 리스크
-① {ai['top_risks'][0] if len(ai['top_risks']) > 0 else '-'}
-② {ai['top_risks'][1] if len(ai['top_risks']) > 1 else '-'}
-
-💡 기회 요인
-{ai['opportunity']}
-
-🧭 대응 전략
-{ai['strategy']}
-{stage_change_alert}{extreme_fear_alert}
-━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 위험 점수: {total_score:.1f} / {SCORE_MAX:.0f}  ({diff_str} vs 전일)
-🎯 주식 권장: {weight}%  |  현금: {100-weight}%
-🚦 국면: {stage_label}
-📋 행동: {stage_action}
-
+📊 위험 점수: {total_score:.1f} / 15 ({diff_str})
+🎯 주식 권장: {weight}% | 국면: {stage_label}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 📈 주요 지표
-
 S&P 500  : {format_index(*spy_raw)}
- └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
+└ 고점대비: {get_drawdown_label(spy_dd)}
 NASDAQ   : {format_index(*qqq_raw)}
 KOSPI    : {format_index(*kospi_raw)}
 RSI(S&P) : {get_rsi_label(rsi)}
 
-💵 환율 (USD/KRW)  [{fx_src}]
-{fx_c:,.0f}원  {fx_status}
- ├ 1년 평균: {fx_1y:,.0f}원  ({gap(fx_c, fx_1y):+.1f}%)
- └ 2년 평균: {fx_2y:,.0f}원  ({fx_2y_gap:+.1f}%)
+💵 환율 (USD/KRW) [{fx_src}]
+{fx_c:,.0f}원 {fx_status} (2년평균 대비 {fx_2y_gap:+.1f}%)
 
-😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score else "지연"}
-📊 VIX      : {vix:.2f}  {"🚨" if vix > VIX["danger"] else ("⚠️" if vix > VIX["warn"] else "✅")}
-💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
-🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}  {f"({us10y[0]-us10y[1]:+.2f}%p)" if us10y and us10y[0] and us10y[1] else ""}
+😨 공포탐욕: {f"{fg_score} {fg_label}" if fg_score else "지연"}
+📊 VIX     : {vix:.2f} {'🚨' if vix > VIX['danger'] else '✅'}
+💲 달러인덱스: {dxy:.1f} {dxy_status}
+🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y[0] else "지연"}
 📉 HY스프레드: {hy_str}
-🥇 금       : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
+🥇 금       : {f"{gold[0]:,.0f} {get_gold_signal(gold)}" if gold else "지연"}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]) if spy_raw[0] else 0, us10y, hy_spread, dxy_mom)}
-
-🛠 시스템: {"🚨 패닉 감지" if is_panic else "✅ 정상"}
+💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]), us10y, hy_spread, dxy_mom)}
 """
-
-    # ── 텔레그램 전송 ────────────────────────────
     try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
-            data={"chat_id": ENV["CHAT_ID"], "text": msg},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        log("✅ 텔레그램 전송 완료")
-    except Exception as e:
-        log(f"❌ 텔레그램 전송 실패: {e}")
+        requests.post(f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage", data={"chat_id": ENV["CHAT_ID"], "text": msg}, timeout=15)
+        log("✅ 전송 완료")
+    except Exception as e: log(f"❌ 전송 실패: {e}")
 
     save_state(total_score, stage_label)
-    log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
-
 
 if __name__ == "__main__":
     main()
