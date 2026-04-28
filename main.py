@@ -21,7 +21,7 @@ FG_EXTREME_FEAR  = 10
 DXY_MOM_WARN     = 3.0
 DRAWDOWN_WARN    = -10.0   # 고점 대비 낙폭 경고
 DRAWDOWN_DANGER  = -20.0   # 고점 대비 낙폭 위험
-AI_WEIGHT        = 0.5     # AI 분석 비중 강화 (0.35 -> 0.7 -> 0.5 중간값)
+AI_WEIGHT        = 0.7     # AI 분석 비중 강화 (0.35 -> 0.7)
 
 STATE_FILE  = "bot_state.json"
 RETRY_COUNT = 4
@@ -270,7 +270,7 @@ def get_dxy_momentum(dxy_series):
     return pct(dxy_series[-1], dxy_series[-21])
 
 # ==========================================
-# 📰 뉴스 키워드 추출 (HTML 태그 제거 추가)
+# 📰 뉴스 키워드 추출 (HTML 제거 보완)
 # ==========================================
 ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
@@ -325,10 +325,14 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
     )
     data = json.loads(res.choices[0].message.content.strip())
     data["score"] = max(-2, min(2, float(data.get("score", 0))))
+    data.setdefault("market_phase", "분석 중")
+    data.setdefault("top_risks",    ["데이터 부족", "재시도"])
+    data.setdefault("opportunity",  "-")
+    data.setdefault("strategy",      "관망")
     return data
 
 # ==========================================
-# 🎯 종합 위험 점수 (코스피 점수 반영 제외)
+# 🎯 종합 위험 점수
 # ==========================================
 def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_score, hy_spread, spy_dd):
     if spy[0] == 0: return 2.0
@@ -388,13 +392,13 @@ def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_scor
         if fg_score > 80:                  s += 1.0
         elif fg_score < FG_EXTREME_FEAR:   s -= 1.5
 
-    # AI 보정 (0.5: 매크로 해석력 강화)
+    # AI 보정 (0.7: 매크로 해석력 강화)
     s += ai_score * AI_WEIGHT
 
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 📋 보조 분석 로직
+# 📋 보조 분석
 # ==========================================
 def get_gold_signal(gold):
     if not gold: return "지연"
@@ -424,7 +428,8 @@ def get_macro_comment(gold, dxy, spy_daily, us10y, hy_spread, dxy_mom):
 
 def format_index(c, p, sma, _=None):
     if c == 0: return "데이터 지연"
-    return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%  │  200일선 {gap(c,sma):+.1f}%"
+    # 가격과 변동률은 첫 줄에, 200일선 정보는 다음 줄에 배치
+    return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%\n ├ 200일선 대비: {gap(c,sma):+.1f}%"
 
 # ==========================================
 # 🚀 메인
@@ -454,7 +459,7 @@ def main():
     try:
         feed = feedparser.parse("https://finance.yahoo.com/news/rssindex")
         news_context = extract_news_keywords(feed.entries)
-    except: news_context = "뉴스 수집 실패"
+    except Exception as e: news_context = "뉴스 수집 실패"
 
     market_summary = {
         "SP500":     {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2), "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
@@ -469,7 +474,7 @@ def main():
         "RSI_SP500": rsi,
     }
     try: ai = get_ai_analysis(news_context, market_summary)
-    except: ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["분석 불가"], "opportunity": "-", "strategy": "관망"}
+    except Exception as e: ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["분석 불가"], "opportunity": "-", "strategy": "관망"}
 
     total_score = calc_risk_score(spy_raw, qqq_raw, fx_data, vix, dxy_series, ai["score"], us10y, fg_score, hy_spread, spy_dd)
     weight = round(max(0, min(100, 100 - total_score * WEIGHT_PER_PCT)))
@@ -482,56 +487,79 @@ def main():
     else: stage_label, stage_action = stages[min(4, int(total_score // 3))]
 
     prev = load_state()
+    prev_score = prev.get("score", total_score)
     prev_stage = prev.get("stage", stage_label)
-    score_diff = total_score - prev.get("score", total_score)
+    score_diff = total_score - prev_score
     diff_str = f"{score_diff:+.1f} {arrow(score_diff)}"
 
-    # 알림 섹션 강화
-    alerts = []
-    if prev_stage != stage_label: alerts.append(f"📢 국면 변화: {prev_stage} → {stage_label}")
-    if is_extreme_fear: alerts.append(f"😱 극단적 공포 감지 (F&G={fg_score}) → 분할매수 검토")
-    alert_msg = "\n" + "\n".join(alerts) + "\n" if alerts else ""
+    stage_change_alert = f"\n🔔 국면 변화 감지\n   {prev_stage} → {stage_label}\n" if prev_stage != stage_label else ""
+    extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 분할매수 검토 구간\n" if is_extreme_fear else ""
+    bullish_suffix = "  🔥 강세장" if (spy_raw[0] > 0 and gap(spy_raw[0], spy_raw[2]) > 3 and qqq_raw[0] > 0 and gap(qqq_raw[0], qqq_raw[2]) > 3) else ""
 
-    fx_c, _, fx_1y, fx_2y, fx_src = fx_data
+    fx_c, fx_p, fx_1y, fx_2y, fx_src = fx_data
     fx_2y_gap = gap(fx_c, fx_2y)
-    fx_status = "⚠️ 역사적 고점" if fx_2y_gap > FX_GAP["danger"] else "🟠 주의" if fx_2y_gap > FX_GAP["caution"] else "✅ 정상"
-    dxy_status = "✅" if dxy < DXY["warn"] else "⚠️" if dxy < DXY["danger"] else "🚨"
+    fx_status = ("⚠️ 역사적 고점권" if fx_2y_gap > FX_GAP["danger"] else "🟠 주의 수준" if fx_2y_gap > FX_GAP["caution"] else "✅ 정상 범위")
+    dxy_status = "✅" if dxy < DXY["warn"] else ("⚠️" if dxy < DXY["danger"] else "🚨")
+    dxy_mom_str = (f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom > DXY_MOM_WARN else ''}" if dxy_mom else "")
 
     if hy_spread and hy_spread[0]:
-        hy_str = f"{hy_spread[0]:.2f}% {'🔴' if hy_spread[0] > HY_SPREAD_DANGER else '🟠' if hy_spread[0] > HY_SPREAD_WARN else '🟢'}"
+        hys = hy_spread[0]
+        hy_chg = (hys - hy_spread[1]) if hy_spread[1] else 0
+        hy_icon = "🔴" if hys > HY_SPREAD_DANGER else ("🟠" if hys > HY_SPREAD_WARN else "🟢")
+        hy_str  = f"{hys:.2f}%  {hy_icon}  ({hy_chg:+.2f}%p)"
     else: hy_str = "지연"
 
-    msg = f"""🤖 퀀텀 인사이트 v4 | {datetime.now().strftime("%Y.%m.%d %H:%M")}
+    now_str = datetime.now().strftime("%Y.%m.%d %H:%M")
+    msg = f"""🤖 퀀텀 인사이트 v4  |  {now_str}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 시장 국면: {ai['market_phase']} {alert_msg}
-⚠️ 리스크: {', '.join(ai['top_risks'])}
-💡 기회: {ai['opportunity']}
-🧭 전략: {ai['strategy']}
+📌 시장 국면
+{ai['market_phase']}{bullish_suffix}
 
-📊 위험 점수: {total_score:.1f} / 15 ({diff_str})
-🎯 주식 권장: {weight}% | 국면: {stage_label}
+⚠️ 핵심 리스크
+① {ai['top_risks'][0] if len(ai['top_risks']) > 0 else '-'}
+② {ai['top_risks'][1] if len(ai['top_risks']) > 1 else '-'}
+
+💡 기회 요인
+{ai['opportunity']}
+
+🧭 대응 전략
+{ai['strategy']}
+{stage_change_alert}{extreme_fear_alert}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 위험 점수: {total_score:.1f} / 15.0  ({diff_str} vs 전일)
+🎯 주식 권장: {weight}%  |  현금: {100-weight}%
+🚦 국면: {stage_label}
+📋 행동: {stage_action}
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 📈 주요 지표
+
 S&P 500  : {format_index(*spy_raw)}
-└ 고점대비: {get_drawdown_label(spy_dd)}
+ └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
 NASDAQ   : {format_index(*qqq_raw)}
 KOSPI    : {format_index(*kospi_raw)}
 RSI(S&P) : {get_rsi_label(rsi)}
 
-💵 환율 (USD/KRW) [{fx_src}]
-{fx_c:,.0f}원 {fx_status} (2년평균 대비 {fx_2y_gap:+.1f}%)
+💵 환율 (USD/KRW)  [{fx_src}]
+{fx_c:,.0f}원  {fx_status}
+ ├ 1년 평균: {fx_1y:,.0f}원  ({gap(fx_c, fx_1y):+.1f}%)
+ └ 2년 평균: {fx_2y:,.0f}원  ({fx_2y_gap:+.1f}%)
 
-😨 공포탐욕: {f"{fg_score} {fg_label}" if fg_score else "지연"}
-📊 VIX     : {vix:.2f} {'🚨' if vix > VIX['danger'] else '✅'}
-💲 달러인덱스: {dxy:.1f} {dxy_status}
-🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y[0] else "지연"}
+😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score else "지연"}
+📊 VIX      : {vix:.2f}  {"🚨" if vix > VIX["danger"] else ("⚠️" if vix > VIX["warn"] else "✅")}
+💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
+🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}  {f"({us10y[0]-us10y[1]:+.2f}%p)" if us10y and us10y[0] and us10y[1] else ""}
 📉 HY스프레드: {hy_str}
-🥇 금       : {f"{gold[0]:,.0f} {get_gold_signal(gold)}" if gold else "지연"}
+🥇 금       : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
 
-💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]), us10y, hy_spread, dxy_mom)}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]) if spy_raw[0] else 0, us10y, hy_spread, dxy_mom)}
+
+🛠 시스템: {"🚨 패닉 감지" if is_panic else "✅ 정상"}
 """
     try:
-        requests.post(f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage", data={"chat_id": ENV["CHAT_ID"], "text": msg}, timeout=15)
+        resp = requests.post(f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage", data={"chat_id": ENV["CHAT_ID"], "text": msg}, timeout=15)
+        resp.raise_for_status()
         log("✅ 전송 완료")
     except Exception as e: log(f"❌ 전송 실패: {e}")
 
