@@ -511,7 +511,7 @@ def main():
 
     now_str = datetime.now().strftime("%Y.%m.%d %H:%M")
     msg = f"""🤖 퀀텀 인사이트 v4  |  {now_str}
-━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
 
@@ -525,13 +525,13 @@ def main():
 🧭 대응 전략
 {ai['strategy']}
 {stage_change_alert}{extreme_fear_alert}
-━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 📊 위험 점수: {total_score:.1f} / 15.0  ({diff_str} vs 전일)
 🎯 주식 권장: {weight}%  |  현금: {100-weight}%
 🚦 국면: {stage_label}
 📋 행동: {stage_action}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 📈 주요 지표
 
 S&P 500  : {format_index(*spy_raw)}
@@ -552,7 +552,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
 📉 HY스프레드: {hy_str}
 🥇 금       : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━
 💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]) if spy_raw[0] else 0, us10y, hy_spread, dxy_mom)}
 
 🛠 시스템: {"🚨 패닉 감지" if is_panic else "✅ 정상"}
