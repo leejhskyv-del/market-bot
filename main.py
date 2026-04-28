@@ -429,7 +429,7 @@ def get_macro_comment(gold, dxy, spy_daily, us10y, hy_spread, dxy_mom):
 def format_index(c, p, sma, _=None):
     if c == 0: return "데이터 지연"
     # 가격과 변동률은 첫 줄에, 200일선 정보는 다음 줄에 배치
-    return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%\n ├ 200일선 대비: {gap(c,sma):+.1f}%"
+    return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%\n └ 200일선 대비: {gap(c,sma):+.1f}%"
 
 # ==========================================
 # 🚀 메인
