@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from openai import OpenAI
 
 # ==========================================
-# 🥇 인프라 및 방어적 함수
+# 🥇 인프라 설정
 # ==========================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 def log(msg): print(msg); logging.info(msg)
@@ -13,6 +13,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN"); CHAT_ID = os.getenv("CHAT_ID")
 client = OpenAI(api_key=OPENAI_API_KEY)
 STATE_FILE = "bot_state.json"
 
+# [방어 로직] 0으로 나누기 방지
 def pct(c, p): return (c - p) / p * 100 if p and p != 0 else 0
 def gap(c, s): return (c - s) / s * 100 if s and s != 0 else 0
 
@@ -27,10 +28,10 @@ def save_state(score, state):
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump({"score": score, "state": state}, f, ensure_ascii=False, indent=2)
-    except: pass
+    except Exception as e: log(f"상태 저장 오류: {e}")
 
 # ==========================================
-# 📊 데이터 엔진 (1년/2년 평균가 복구)
+# 📊 데이터 엔진 (1년/2년 평균가 완전 유지)
 # ==========================================
 def safe(func, retry=5, delay=60):
     for i in range(retry):
@@ -60,9 +61,12 @@ def get_fx_final():
     source = "NAVER"
     try:
         res = requests.get("https://finance.naver.com/marketindex/exchangeList.naver", headers={"User-Agent": "Mozilla/5.0"}, timeout=10).text
-        price = re.search(r"<td class=\"sale\">([\d,]+\.\d+)</td>", re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res, re.DOTALL).group())
+        row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res, re.DOTALL)
+        price = re.search(r"<td class=\"sale\">([\d,]+\.\d+)</td>", row.group())
         fx_c = float(price.group(1).replace(",", ""))
-    except: fx_c = 1400.0; source = "DEFAULT"
+    except: 
+        fx_c = 1400.0; source = "DEFAULT"
+    
     v = get_series("DEXKOUS")
     if v:
         fx_p = v[-2] if len(v) > 1 else fx_c
@@ -79,7 +83,7 @@ def get_gold_full():
     except: return None
 
 # ==========================================
-# 🧠 AI 심층 분석 엔진 (대표님 요청대로 "풀 버전" 복구)
+# 🧠 AI 심층 분석 엔진 (풀 프롬프트 복구)
 # ==========================================
 def get_expert_ai_analysis(news, market_summary):
     prompt = f"""너는 20년 경력의 월스트리트 수석 매크로 전략가다. 
@@ -98,11 +102,13 @@ def get_expert_ai_analysis(news, market_summary):
 def calc_master_score(spy, qqq, fx_data, vix, dxy, ai_score):
     if spy[0] == 0: return 2.0
     s = 0
+    # 지표 가중치 합산
     for idx in [spy, qqq]:
         c, p, sma = idx
         if c == 0: continue
         if gap(c, sma) < -3: s += 2
         if pct(c, p) < -2.5: s += 2.5 # 폭락 속도 가중치
+    
     fx_c, fx_p, fx_1y, fx_2y, _ = fx_data
     if gap(fx_c, fx_1y) > 4: s += 1
     if pct(fx_c, fx_p) > 1.5: s += 1.5
@@ -131,7 +137,7 @@ def get_macro_insight(gold, dxy, spy_mom):
     return "💡 매크로: 뚜렷한 쏠림 없음 ➖"
 
 # ==========================================
-# 🚀 메인 오퍼레이션 (에러 수정 및 DXY 해석 추가)
+# 🚀 메인 오퍼레이션 (나스닥/코스피 메시지 완전 복구)
 # ==========================================
 def main():
     log(f"📊 퀀텀 가동 ({datetime.now()})")
@@ -139,14 +145,14 @@ def main():
     qqq = safe(lambda:get_index_full("NASDAQCOM")) or (0, 0, 0)
     kospi = safe(lambda:get_index_full("KOSPI")) or (0, 0, 0)
     
-    # [수정] 함수명 get_fx_final로 정확히 호출
+    # [수정] 정확한 함수명 호출로 NameError 해결
     fx_data = get_fx_final() 
     gold = get_gold_full()
     
     vix_v = safe(lambda:get_series("VIXCLS")); dxy_v = safe(lambda:get_series("DTWEXBGS"))
     vix = vix_v[-1] if vix_v else 22; dxy = dxy_v[-1] if dxy_v else 118.0
     
-    # [추가] 달러인덱스(Broad) 수치 해석 문구
+    # 달러인덱스 해석 문구
     dxy_status = "✅ 정상" if dxy < 122 else "⚠️ 경계" if dxy < 126 else "🚨 위험"
     
     feed = feedparser.parse("https://finance.yahoo.com/news/rssindex")
@@ -155,7 +161,11 @@ def main():
     ai = get_expert_ai_analysis(news_context, f"SP500:{spy[0]}, VIX:{vix}, FX:{fx_data[0]}")
     total_score = calc_master_score(spy, qqq, fx_data, vix, dxy, ai['score'])
     
+    # 지표별 출력 스트링 구성
     spy_str = f"{spy[0]:.0f} ({pct(spy[0], spy[1]):+.2f}%)" if spy[0] > 0 else "지연"
+    qqq_str = f"{qqq[0]:.0f} ({pct(qqq[0], qqq[1]):+.2f}%)" if qqq[0] > 0 else "지연"
+    kos_str = f"{kospi[0]:.0f} ({pct(kospi[0], kospi[1]):+.2f}%)" if kospi[0] > 0 else "지연"
+    
     fx_c, fx_p, fx_1y, fx_2y, fx_s = fx_data
     fx_status = "⚠️ 역사적 고점" if gap(fx_c, fx_2y) > 8 else "✅ 정상범위"
     
@@ -167,6 +177,7 @@ def main():
     diff = total_score - prev.get("score", total_score)
     diff_str = f"{diff:+.1f} {'📈' if diff > 0 else '📉' if diff < 0 else '➖'}"
 
+    # [핵심] 대표님이 요청하신 나스닥/코스피 포함 전체 리포트 구성
     msg = f"""🤖 퀀텀 인사이트: 데일리 리포트
 
 📌 요약: {ai['summary']}
@@ -178,8 +189,11 @@ def main():
 
 📊 주요 지표
 - S&P500: {spy_str}
+- NASDAQ: {qqq_str}
+- KOSPI: {kos_str}
 - 환율: {fx_c:,.0f}원 [{fx_s}] ({fx_status})
-  └ 1년 평균: {fx_1y:,.0f}원 / 2년 평균: {fx_2y:,.0f}원
+  └ 1년 평균: {fx_1y:,.0f}원 (대비 {gap(fx_c, fx_1y):+.1f}%)
+  └ 2년 평균: {fx_2y:,.0f}원 (대비 {gap(fx_c, fx_2y):+.1f}%)
 - VIX: {vix:.2f} / 달러인덱스: {dxy:.1f} ({dxy_status})
 - 금: {f"{gold[0]:.0f} → {get_gold_signal(gold)}" if gold else "지연"}
 
@@ -192,7 +206,7 @@ def main():
     except Exception as e: log(f"전송 실패: {e}")
     
     save_state(total_score, st)
-    log("✅ 전송 프로세스 완료")
+    log("✅ 리포트 전송 완료")
 
 if __name__=="__main__":
     main()
