@@ -61,6 +61,12 @@ def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
             res = func()
             if res is not None:
                 return res
+        except requests.exceptions.HTTPError as e:
+            log(f"⚠️ [{label}] {i+1}차 실패: {type(e).__name__}: {e}")
+            # 418(봇 차단)·401·403은 재시도해도 의미없음 → 즉시 포기
+            if e.response is not None and e.response.status_code in (401, 403, 418):
+                log(f"⚡ [{label}] {e.response.status_code} → 재시도 불필요, 즉시 종료")
+                break
         except Exception as e:
             log(f"⚠️ [{label}] {i+1}차 실패: {type(e).__name__}: {e}")
         if i < retry - 1:
@@ -233,22 +239,44 @@ def get_drawdown_label(dd):
     return                    f"{dd:.1f}%  🟢 고점 근접"
 
 # ==========================================
-# 😨 공포탐욕지수 (CNN)
+# 😨 공포탐욕지수
+#    1순위: CNN (브라우저 헤더 강화)
+#    2순위: alternative.me (봇 차단 없음, 키 불필요)
 # ==========================================
+CNN_HEADERS = {
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept":          "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer":         "https://edition.cnn.com/markets/fear-and-greed",
+    "Origin":          "https://edition.cnn.com",
+}
+
+def _fg_label(score):
+    if score <= 10:  return "극단적 공포 😱🚨"
+    if score <= 25:  return "극단적 공포 😱"
+    if score <= 45:  return "공포 😨"
+    if score <= 55:  return "중립 😐"
+    if score <= 75:  return "탐욕 😏"
+    return           "극단적 탐욕 🤑"
+
 def get_fear_greed():
-    res = requests.get(
-        "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
-        headers=YAHOO_HEADERS, timeout=10
-    )
+    # 1순위: CNN (브라우저 헤더)
+    try:
+        res = requests.get(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+            headers=CNN_HEADERS, timeout=10
+        )
+        res.raise_for_status()
+        score = round(float(res.json()["fear_and_greed"]["score"]))
+        return score, _fg_label(score)
+    except Exception as e:
+        log(f"F&G CNN 실패: {e} → alternative.me 시도")
+
+    # 2순위: alternative.me (봇 차단 없음, 키 불필요)
+    res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
     res.raise_for_status()
-    score = round(float(res.json()["fear_and_greed"]["score"]))
-    if score <= 10:    label = "극단적 공포 😱🚨"
-    elif score <= 25:  label = "극단적 공포 😱"
-    elif score <= 45:  label = "공포 😨"
-    elif score <= 55:  label = "중립 😐"
-    elif score <= 75:  label = "탐욕 😏"
-    else:              label = "극단적 탐욕 🤑"
-    return score, label
+    score = round(float(res.json()["data"][0]["value"]))
+    return score, _fg_label(score) + " (alt)"
 
 # ==========================================
 # 🏦 미 10년물 금리
