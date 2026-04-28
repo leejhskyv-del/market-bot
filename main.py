@@ -174,8 +174,12 @@ def main():
     if spy[0] > 0 and qqq[0] > 0:
         if gap(spy[0], spy[2]) > 3 and gap(qqq[0], qqq[2]) > 3: trend_suffix = " (🔥 강상승)"
     
+    # [환율 판단 로직 세분화] 대표님 요청 반영
     fx_c, fx_p, fx_1y, fx_2y, fx_s = fx_data
-    fx_status = "⚠️ 역사적 고점" if gap(fx_c, fx_2y) > 8 else "✅ 정상범위"
+    fx_gap_2y = gap(fx_c, fx_2y)
+    if fx_gap_2y > 8: fx_status = "⚠️ 역사적 고점"
+    elif fx_gap_2y > 4: fx_status = "🟠 환율 높음 (주의)"
+    else: fx_status = "✅ 정상범위"
     
     panic = (vix > 35 or pct(spy[0], spy[1]) < -4) if spy[0] > 0 else False
     stages = [("🟢 공격", "매수"), ("🔵 상승", "유지"), ("🟡 중립", "관망"), ("🟠 경고", "중단"), ("🔴 위험", "축소")]
