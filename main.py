@@ -21,7 +21,7 @@ FG_EXTREME_FEAR  = 10
 DXY_MOM_WARN     = 3.0
 DRAWDOWN_WARN    = -10.0   # 고점 대비 낙폭 경고
 DRAWDOWN_DANGER  = -20.0   # 고점 대비 낙폭 위험
-AI_WEIGHT        = 0.7     # AI 분석 비중 강화 (0.35 -> 0.7)
+AI_WEIGHT        = 0.7     # AI 분석 비중 강화
 
 STATE_FILE  = "bot_state.json"
 RETRY_COUNT = 4
@@ -270,7 +270,7 @@ def get_dxy_momentum(dxy_series):
     return pct(dxy_series[-1], dxy_series[-21])
 
 # ==========================================
-# 📰 뉴스 키워드 추출 (HTML 제거 보완)
+# 📰 뉴스 키워드 추출
 # ==========================================
 ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
@@ -283,7 +283,7 @@ def extract_news_keywords(entries, max_items=6):
     for e in entries[:max_items]:
         title     = e.title.strip()
         summary   = getattr(e, "summary", "")
-        summary   = re.sub(r'<[^>]+>', '', summary) # HTML 태그 제거
+        summary   = re.sub(r'<[^>]+>', '', summary)
         sentences = re.split(r'[.!?]', summary)
         key_sents = [s.strip() for s in sentences
                      if any(kw.lower() in s.lower() for kw in ECON_KEYWORDS)]
@@ -292,7 +292,7 @@ def extract_news_keywords(entries, max_items=6):
     return "\n".join(results)
 
 # ==========================================
-# 🧠 AI 분석
+# 🧠 AI 분석 (핵심 리스크 3개 요청으로 수정)
 # ==========================================
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
     prompt = f"""
@@ -314,7 +314,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 - 지수가 200일선 아래 + 호재 뉴스 → 데드캣 의심
 
 [출력: JSON만, 다른 텍스트 없음]
-{{"score":<-2~2 정수>,"market_phase":"<국면 한 줄>","top_risks":["<리스크1>","<리스크2>"],"opportunity":"<기회 요인>","strategy":"<대응 전략 2~3문장>"}}
+{{"score":<-2~2 정수>,"market_phase":"<국면 한 줄>","top_risks":["<리스크1>","<리스크2>","<리스크3>"],"opportunity":"<기회 요인>","strategy":"<대응 전략 2~3문장>"}}
 """
     res = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -326,7 +326,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
     data = json.loads(res.choices[0].message.content.strip())
     data["score"] = max(-2, min(2, float(data.get("score", 0))))
     data.setdefault("market_phase", "분석 중")
-    data.setdefault("top_risks",    ["데이터 부족", "재시도"])
+    data.setdefault("top_risks",    ["데이터 부족", "재시도", "-"])
     data.setdefault("opportunity",  "-")
     data.setdefault("strategy",      "관망")
     return data
@@ -339,47 +339,37 @@ def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_scor
     s   = 0.0
     dxy = dxy_series[-1] if dxy_series else 118.0
 
-    # 지수 신호
-    c_spy, p_spy, sma_spy, _ = spy
-    if c_spy > 0:
-        if gap(c_spy, sma_spy) < -SPY_TREND_GAP: s += 2.0
-        if pct(c_spy, p_spy)   < SPY_DAILY_DROP:  s += 2.5
-    c_qqq, _, sma_qqq, _ = qqq
-    if c_qqq > 0 and gap(c_qqq, sma_qqq) < -SPY_TREND_GAP:
+    if spy[0] > 0:
+        if gap(spy[0], spy[2]) < -SPY_TREND_GAP: s += 2.0
+        if pct(spy[0], spy[1])   < SPY_DAILY_DROP:  s += 2.5
+    if qqq[0] > 0 and gap(qqq[0], qqq[2]) < -SPY_TREND_GAP:
         s += 1.5
 
-    # 드로우다운
     if spy_dd is not None:
         if spy_dd <= DRAWDOWN_DANGER: s += 2.5
         elif spy_dd <= DRAWDOWN_WARN: s += 1.0
 
-    # 환율
     fx_c, fx_p, fx_1y, fx_2y, _ = fx_data
     fg_2y = gap(fx_c, fx_2y)
     if fg_2y > FX_GAP["danger"]:    s += 2.0
     elif fg_2y > FX_GAP["caution"]: s += 1.0
     if pct(fx_c, fx_p) > 1.5:       s += 1.5
 
-    # VIX
     if vix > VIX["panic"]:    s += 4.0
     elif vix > VIX["danger"]: s += 2.0
     elif vix > VIX["warn"]:   s += 1.0
 
-    # DXY 절대값 + 속도
     if dxy > DXY["danger"]:    s += 1.5
     elif dxy > DXY["warn"]:    s += 0.5
     dxy_mom = get_dxy_momentum(dxy_series)
-    if dxy_mom is not None:
-        if dxy_mom > DXY_MOM_WARN * 1.5: s += 2.0
-        elif dxy_mom > DXY_MOM_WARN:      s += 1.0
+    if dxy_mom and dxy_mom > DXY_MOM_WARN:
+        s += 2.0 if dxy_mom > DXY_MOM_WARN * 1.5 else 1.0
 
-    # 국채금리
     if us10y and us10y[0] and us10y[1]:
         rc = us10y[0] - us10y[1]
         if rc > 0.2:   s += 2.0
         elif rc > 0.1: s += 1.0
 
-    # 하이일드 스프레드
     if hy_spread and hy_spread[0]:
         hys = hy_spread[0]
         if hys > HY_SPREAD_DANGER:   s += 3.0
@@ -387,14 +377,11 @@ def calc_risk_score(spy, qqq, fx_data, vix, dxy_series, ai_score, us10y, fg_scor
         if hy_spread[1] and (hys - hy_spread[1]) > 0.3:
             s += 1.0
 
-    # 공포탐욕
     if fg_score is not None:
         if fg_score > 80:                  s += 1.0
         elif fg_score < FG_EXTREME_FEAR:   s -= 1.5
 
-    # AI 보정 (0.7: 매크로 해석력 강화)
     s += ai_score * AI_WEIGHT
-
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
@@ -428,7 +415,6 @@ def get_macro_comment(gold, dxy, spy_daily, us10y, hy_spread, dxy_mom):
 
 def format_index(c, p, sma, _=None):
     if c == 0: return "데이터 지연"
-    # 가격과 변동률은 첫 줄에, 200일선 정보는 다음 줄에 배치
     return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%\n └ 200일선 대비: {gap(c,sma):+.1f}%"
 
 # ==========================================
@@ -474,17 +460,31 @@ def main():
         "RSI_SP500": rsi,
     }
     try: ai = get_ai_analysis(news_context, market_summary)
-    except Exception as e: ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["분석 불가"], "opportunity": "-", "strategy": "관망"}
+    except Exception as e: ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["-", "-", "-"], "opportunity": "-", "strategy": "관망"}
 
     total_score = calc_risk_score(spy_raw, qqq_raw, fx_data, vix, dxy_series, ai["score"], us10y, fg_score, hy_spread, spy_dd)
-    weight = round(max(0, min(100, 100 - total_score * WEIGHT_PER_PCT)))
+    
+    # ── 비중 & 국면 결정 (30% 단계별 매도) ──
+    if total_score < 3:
+        stage_label, weight = "🟢 공격적 매수", 100
+        stage_action = "주식 비중 최대 유지 및 수익 극대화"
+    elif total_score < 6:
+        stage_label, weight = "🔵 적극적 유지", 70
+        stage_action = "1차 수익 실현 (자산의 30% 현금화)"
+    elif total_score < 9:
+        stage_label, weight = "🟡 중립 관망", 40
+        stage_action = "보수적 운영 (자산의 60% 현금화 완료)"
+    elif total_score < 12:
+        stage_label, weight = "🟠 방어적 축소", 10
+        stage_action = "최소 비중 유지 (자산의 90% 현금화 완료)"
+    else:
+        stage_label, weight = "🔴 위험 회피", 0
+        stage_action = "전량 대피 및 폭풍우 관망"
 
     is_panic = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
-    is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
-
-    stages = [("🟢 공격적 매수", "주식 80% 이상"), ("🔵 적극적 유지", "주식 60~80%"), ("🟡 중립 관망", "주식 40~60%"), ("🟠 방어적 축소", "주식 20~40%"), ("🔴 위험 회피", "주식 20% 이하")]
-    if is_panic: stage_label, stage_action = "💀 패닉 구간", "현금 확보 + 분할매수 대기"
-    else: stage_label, stage_action = stages[min(4, int(total_score // 3))]
+    if is_panic:
+        stage_label = "💀 패닉 구간"
+        stage_action = "현금 투입 시작 (평소 분할매수액의 2배 증액)"
 
     prev = load_state()
     prev_score = prev.get("score", total_score)
@@ -510,6 +510,8 @@ def main():
     else: hy_str = "지연"
 
     now_str = datetime.now().strftime("%Y.%m.%d %H:%M")
+    
+    # ── 메시지 구성 (핵심 리스크 3개 반영) ──
     msg = f"""🤖 퀀텀 인사이트 v4  |  {now_str}
 ━━━━━━━━━━━━━━━━━━
 📌 시장 국면
@@ -518,6 +520,7 @@ def main():
 ⚠️ 핵심 리스크
 ① {ai['top_risks'][0] if len(ai['top_risks']) > 0 else '-'}
 ② {ai['top_risks'][1] if len(ai['top_risks']) > 1 else '-'}
+③ {ai['top_risks'][2] if len(ai['top_risks']) > 2 else '-'}
 
 💡 기회 요인
 {ai['opportunity']}
@@ -555,7 +558,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
 ━━━━━━━━━━━━━━━━━━
 💡 {get_macro_comment(gold, dxy, pct(spy_raw[0], spy_raw[1]) if spy_raw[0] else 0, us10y, hy_spread, dxy_mom)}
 
-🛠 시스템: {"🚨 패닉 감지" if is_panic else "✅ 정상"}
+🛠 시스템: {"⚠️ 패닉 대응 모드 가동" if is_panic else "✅ 정상"}
 """
     try:
         resp = requests.post(f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage", data={"chat_id": ENV["CHAT_ID"], "text": msg}, timeout=15)
