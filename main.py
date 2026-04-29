@@ -302,7 +302,13 @@ def extract_news_keywords(entries, max_items=6):
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
     prompt = f"""
 당신은 20년 경력의 월스트리트 매크로 전략가입니다.
-시장 데이터와 뉴스를 분석해 투자 리스크를 진단하세요.
+지수 ETF(SPY, QQQ, SCHD, KOSPI) 투자자를 위해 시장 데이터와 뉴스를 분석하세요.
+그리고 추가로 분야별 ETF(QTUM-양자컴퓨터, UFO-우주항공, ARKQ-로봇공학)에 대해서도 시장 데이터와 뉴스를 분석하세요.
+
+[분석 원칙 - 매우 중요]
+1. 단일 종목(예: 테슬라, 엔비디아 등)의 개별 소식은 지수 전체를 흔들 정도의 시스템 리스크가 아니면 완전히 배제하세요.
+2. 매크로(Fed 금리, 물가 지표, 고용, 환율)와 지수 추세(200일선, 과매수/과매도)에만 집중하세요.
+3. '기회 요인'에는 개별 종목 추천이 아닌, 지수 매수 적기나 자산 배분 전략을 제시하세요.
 
 [시장 데이터]
 {json.dumps(market_summary, ensure_ascii=False)}
