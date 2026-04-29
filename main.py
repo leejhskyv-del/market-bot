@@ -453,11 +453,17 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
 # ==========================================
 def get_gold_signal(gold):
     if not gold: return "지연"
-    c, _, p20, _ = gold
-    st_gap = gap(c, p20)
-    if st_gap > 5:    return "🚨 단기 과열"
-    elif st_gap > 2:  return "🟠 상승 추세"
-    elif st_gap < -3: return "🟢 저점 근접"
+    
+    # c: 현재가, sma: 1년(252일) 장기 평균선
+    c, _, _, sma = gold    
+    
+    # 현재가가 장기 평균선 대비 얼마나 떨어져 있는지(%) 계산
+    st_gap = gap(c, sma)   
+    
+    # 기준점은 장기 추세에 맞게 조금 더 넓게 잡아줍니다
+    if st_gap > 10:   return "🚨 장기 과열"
+    elif st_gap > 3:  return "🟠 상승 추세"
+    elif st_gap < -5: return "🟢 저점 근접" # 평균선보다 5% 이상 하락했을 때만 알림
     return "➖ 중립"
 
 def get_macro_comment(gold, dxy, spy_daily, us10y, hy_spread, dxy_mom):
