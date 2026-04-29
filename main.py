@@ -20,7 +20,7 @@ FG_EXTREME_FEAR  = 10
 DXY_MOM_WARN     = 3.0
 DRAWDOWN_WARN    = -10.0
 DRAWDOWN_DANGER  = -20.0
-AI_WEIGHT        = 0.7
+AI_WEIGHT        = 0.5
 
 STATE_FILE  = "bot_state.json"
 RETRY_COUNT = 4
