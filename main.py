@@ -42,7 +42,6 @@ ECON_KEYWORDS = [
     "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업"
 ]
 
-# 💡 추가: 핵심 매크로 이벤트 강조용 키워드
 MACRO_CRITICAL = ["fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike", "연준", "파월", "금리", "인플레이션", "물가"]
 
 # ==========================================
@@ -165,26 +164,12 @@ def get_yahoo_stats(ticker, range_="2y"):
     return closes[-1], closes[-2], sma200, high52
 
 # ==========================================
-# 💱 환율 — (수정) 야후 우선 + 네이버 + 에러추적
+# 💱 환율 — 네이버 제거, 야후 단일 소스화
 # ==========================================
 def get_fx_data():
-    naver_fx = None
     fx_errors = []
-
-    try:
-        res = requests.get("https://finance.naver.com/marketindex/exchangeList.naver",
-                           headers=YAHOO_HEADERS, timeout=10)
-        res.raise_for_status()
-        row = re.search(r"<td class=\"tit\">.*?USD.*?</tr>", res.text, re.DOTALL)
-        if row:
-            m = re.search(r"<td class=\"sale\">([\d,]+\.?\d*)</td>", row.group())
-            if m:
-                naver_fx = float(m.group(1).replace(",", ""))
-    except Exception as e:
-        log(f"환율 네이버 실패: {e}")
-        fx_errors.append("네이버환율")
-
     yh_c = yh_p = yh_1y = yh_2y = None
+    
     try:
         closes = get_yahoo_closes("KRW=X", "2y")
         if closes and len(closes) > 0:
@@ -194,15 +179,13 @@ def get_fx_data():
             yh_2y = sum(closes[-min(len(closes), 504):]) / min(len(closes), 504)
     except Exception as e:
         log(f"환율 야후 실패: {e}")
-        fx_errors.append("야후환율")
+        fx_errors.append("환율(야후)")
 
     if yh_c is None:
         yh_c = yh_p = yh_1y = yh_2y = 1400.0
-    if naver_fx is None:
-        naver_fx = yh_c
 
     err_str = "/".join(fx_errors) if fx_errors else None
-    return yh_c, yh_p, yh_1y, yh_2y, naver_fx, err_str
+    return yh_c, yh_p, yh_1y, yh_2y, err_str
 
 # ==========================================
 # 🥇 금 & RSI & 드로우다운
@@ -295,7 +278,7 @@ def get_dxy_momentum(dxy_series):
     return pct(dxy_series[-1], dxy_series[-21])
 
 # ==========================================
-# 📰 뉴스 키워드 추출 — (수정) 매크로 중요도 분류
+# 📰 뉴스 키워드 추출
 # ==========================================
 def extract_news_keywords(entries, max_items=8):
     results = []
@@ -305,7 +288,7 @@ def extract_news_keywords(entries, max_items=8):
     for e in entries:
         title   = e.title.strip()
         summary = getattr(e, "summary", "")
-        summary = html.unescape(summary) # HTML 특수문자 디코딩
+        summary = html.unescape(summary)
         summary = re.sub(r'<[^>]+>', ' ', summary)
         summary = re.sub(r'\s+', ' ', summary).strip()
         
@@ -325,7 +308,7 @@ def extract_news_keywords(entries, max_items=8):
     return "\n".join(results)
 
 # ==========================================
-# 🧠 AI 분석 — (수정) 상관관계 분석 및 이벤트 우선 반영
+# 🧠 AI 분석
 # ==========================================
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
     prompt = f"""
@@ -336,7 +319,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 1. [이벤트 최우선 반영] 제공된 뉴스 중 '🚨[핵심 매크로]' 태그가 붙은 연준(Fed), 금리 관련 뉴스가 있다면, 시장 파급력을 최우선 평가하여 'market_phase'와 'top_risks'에 명확히 반영하세요.
 2. 매크로 지표와 지수 추세(특히 200일선)에 집중하고 개별 종목은 무시하세요.
 3. [상관관계 분석] 달러, 국채금리, VIX, 하이일드 스프레드, 금의 흐름을 종합하여 현재 자금 이동(Risk-On/Off) 특징을 파악하세요.
-4. [대응 전략] '매일/매주 기계적으로 적립식 분할 매수하는 투자자' 관점에서 전략을 제시하세요. 200일선 이탈 또는 연준 이벤트에 따른 매수 속도 조절 등 구체적인 액션 플랜을 제시하세요.
+4. [대응 전략] '자동 적립식 투자를 기본으로 하되, 리스크에 따라 보유 자산을 20%씩 단계적으로 현금화하는 투자자' 관점에서 전략을 제시하세요. 200일선 이탈 또는 핵심 매크로 이벤트에 따른 액션 플랜을 구체적으로 제시하세요.
 
 [시장 데이터]
 {json.dumps(market_summary, ensure_ascii=False)}
@@ -345,7 +328,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 {news}
 
 [출력: JSON만, 다른 텍스트 없음]
-{{"score":<-2~2 정수>,"market_phase":"<국면 한 줄>","top_risks":["<리스크1>","<리스크2>","<리스크3>"],"opportunity":"<기회 요인>","strategy":"<기계적 분할매수 관점의 대응 전략>","macro_correlation":"<지표 간 상관관계 기반 시장 진단 2~3문장>"}}
+{{"score":<-2~2 정수>,"market_phase":"<국면 한 줄>","top_risks":["<리스크1>","<리스크2>","<리스크3>"],"opportunity":"<기회 요인>","strategy":"<단계적 현금화 룰 기반 대응 전략>","macro_correlation":"<지표 간 상관관계 기반 시장 진단 2~3문장>"}}
 """
     res = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -367,18 +350,23 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 # 🎯 종합 위험 점수
 # ==========================================
 def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
-                    us10y, fg_score, hy_spread, spy_dd):
+                    us10y, fg_score, hy_spread, spy_dd, gold):
     if spy[0] == 0:
         return 2.0
     s   = 0.0
     dxy = dxy_series[-1] if dxy_series else 118.0
 
     if spy[0] > 0:
-        if gap(spy[0], spy[2]) < -SPY_TREND_GAP: s += 2.0
+        spy_gap = gap(spy[0], spy[2])
+        if spy_gap < -SPY_TREND_GAP: s += 2.0
+        elif spy_gap < 0:            s += 1.0
+        
         if pct(spy[0], spy[1]) < SPY_DAILY_DROP:  s += 2.5
 
-    if qqq[0] > 0 and gap(qqq[0], qqq[2]) < -SPY_TREND_GAP:
-        s += 1.5
+    if qqq[0] > 0:
+        qqq_gap = gap(qqq[0], qqq[2])
+        if qqq_gap < -SPY_TREND_GAP: s += 1.5
+        elif qqq_gap < 0:            s += 0.5
 
     c_kos = kospi[0] if kospi else 0
     sma_kos = kospi[2] if kospi else 0
@@ -391,7 +379,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
         if spy_dd <= DRAWDOWN_DANGER: s += 2.5
         elif spy_dd <= DRAWDOWN_WARN: s += 1.0
 
-    fx_c, fx_p, fx_1y, fx_2y, _, _ = fx_data
+    fx_c, fx_p, fx_1y, fx_2y, _ = fx_data
     fg_2y = gap(fx_c, fx_2y)
     if fg_2y > FX_GAP["danger"]:    s += 2.0
     elif fg_2y > FX_GAP["caution"]: s += 1.0
@@ -420,8 +408,13 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
             s += 1.0
 
     if fg_score is not None:
-        if fg_score > 80:               s += 1.0
+        if fg_score > 80:                s += 1.0
         elif fg_score < FG_EXTREME_FEAR: s -= 1.5
+
+    if gold and gold[3] > 0:
+        gold_gap = gap(gold[0], gold[3])
+        if gold_gap > 10:   s += 1.5 
+        elif gold_gap > 5:  s += 0.5 
 
     s += ai_score * AI_WEIGHT
     return max(0.0, min(SCORE_MAX, s))
@@ -434,10 +427,9 @@ def format_index(c, p, sma, _=None):
 # 🚀 메인
 # ==========================================
 def main():
-    log(f"📊 퀀텀 v5.3 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
-    api_errors = [] # 💡 전체 에러 추적
+    log(f"📊 퀀텀 v5.4 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
+    api_errors = [] 
 
-    # 데이터 수집 (실패 시 api_errors에 추가)
     spy_raw   = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
     if not spy_raw: spy_raw = (0, 0, 0, 0); api_errors.append("SPY")
 
@@ -449,8 +441,8 @@ def main():
 
     fx_data   = safe(lambda: get_fx_data(), "FX")
     if not fx_data: 
-        fx_data = (1400, 1400, 1400, 1400, 1400, "환율전체")
-    yh_c, yh_p, yh_1y, yh_2y, nv_c, fx_err = fx_data
+        fx_data = (1400, 1400, 1400, 1400, "환율전체")
+    yh_c, yh_p, yh_1y, yh_2y, fx_err = fx_data
     if fx_err: api_errors.append(fx_err)
 
     gold      = safe(lambda: get_gold_data(), "GOLD")
@@ -478,7 +470,6 @@ def main():
     rsi    = calc_rsi_wilder(spy_closes) if spy_closes else None
     spy_dd = calc_drawdown(spy_raw[0], spy_raw[3]) if spy_raw[0] else None
 
-    # 뉴스
     try:
         feed         = feedparser.parse("https://finance.yahoo.com/news/rssindex")
         news_context = extract_news_keywords(feed.entries)
@@ -487,7 +478,6 @@ def main():
         news_context = "뉴스 수집 실패"
         api_errors.append("뉴스")
 
-    # AI 분석
     market_summary = {
         "SP500":      {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2),
                        "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
@@ -510,36 +500,35 @@ def main():
         ai = {"score": 0, "market_phase": "AI 일시 지연", "top_risks": ["-", "-", "-"], "opportunity": "-", "strategy": "관망", "macro_correlation": "분석 지연"}
         api_errors.append("AI응답")
 
-    # 점수 & 국면
     total_score = calc_risk_score(
         spy_raw, qqq_raw, kospi_raw, fx_data, vix, dxy_series,
-        ai["score"], us10y, fg_score, hy_spread, spy_dd
+        ai["score"], us10y, fg_score, hy_spread, spy_dd, gold
     )
 
+    # 💡 수정: 20% 단위 매도 룰 적용
     if total_score < 3:
         stage_label, weight = "🟢 공격적 매수", 100
-        stage_action = "주식 비중 최대 유지 및 수익 극대화"
+        stage_action = "주식 비중 100% 유지 및 수익 극대화"
     elif total_score < 6:
-        stage_label, weight = "🔵 적극적 유지", 70
-        stage_action = "1차 수익 실현 (자산의 30% 현금화)"
+        stage_label, weight = "🔵 적극적 유지", 80
+        stage_action = "1차 수익 실현 및 방어 (자산의 20% 현금화)"
     elif total_score < 9:
-        stage_label, weight = "🟡 중립 관망", 40
-        stage_action = "보수적 운영 (자산의 60% 현금화 완료)"
+        stage_label, weight = "🟡 부분 방어", 60
+        stage_action = "2차 추가 수익 실현 (자산의 40% 현금화 완료)"
     elif total_score < 12:
-        stage_label, weight = "🟠 방어적 축소", 10
-        stage_action = "최소 비중 유지 (자산의 90% 현금화 완료)"
+        stage_label, weight = "🟠 적극적 축소", 40
+        stage_action = "보수적 운영 (자산의 60% 현금화 완료)"
     else:
-        stage_label, weight = "🔴 위험 회피", 0
-        stage_action = "전량 대피 및 폭풍우 관망"
+        stage_label, weight = "🔴 위험 회피", 20
+        stage_action = "대피 및 폭풍우 관망 (80% 현금화)"
 
     is_panic        = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
     if is_panic:
         stage_label  = "💀 패닉 구간"
-        stage_action = "현금 투입 시작 (평소 분할매수액의 2배 증액)"
+        stage_action = "폭락장 줍줍 기회 (평소 분할매수액의 2배 증액)"
 
-    # 전일 비교
     prev        = load_state()
     prev_score  = prev.get("score", total_score)
     prev_stage  = prev.get("stage", stage_label)
@@ -551,7 +540,7 @@ def main():
         if prev_stage != stage_label else ""
     )
     extreme_fear_alert = (
-        f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 분할매수 검토 구간\n"
+        f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n"
         if is_extreme_fear else ""
     )
     bullish_suffix = (
@@ -579,14 +568,13 @@ def main():
 
     now_str = datetime.now().strftime("%Y.%m.%d %H:%M")
 
-    # 💡 에러 표시 로직 적용
     sys_status_msg = "✅ 정상"
     if api_errors:
         sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})"
     if is_panic:
         sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
-    msg = f"""🤖 퀀텀 인사이트 v5.3  |  {now_str}
+    msg = f"""🤖 퀀텀 인사이트 v5.4  |  {now_str}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
@@ -618,7 +606,7 @@ KOSPI    : {format_index(*kospi_raw)}
 RSI(S&P) : {get_rsi_label(rsi)}
 
 💵 환율 (USD/KRW)
-{yh_c:,.0f}원 (네이버: {nv_c:,.0f}원)  {fx_status}
+{yh_c:,.0f}원  {fx_status}
  ├ 1년 평균: {yh_1y:,.0f}원  ({gap(yh_c, yh_1y):+.1f}%)
  └ 2년 평균: {yh_2y:,.0f}원  ({fx_2y_gap:+.1f}%)
 
