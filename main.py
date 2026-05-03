@@ -455,11 +455,11 @@ def main():
     fg_score, fg_label = safe(lambda: get_fear_greed(), "F&G") or (None, None)
     if not fg_score: api_errors.append("공포탐욕")
 
-    vix_closes = safe(lambda: get_yahoo_closes("^VIX", "3m"), "VIX")
+    vix_closes = safe(lambda: get_yahoo_closes("^VIX", "6mo"), "VIX")
     vix = vix_closes[-1] if vix_closes else 22.0
     if not vix_closes: api_errors.append("VIX")
 
-    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "3m"), "DXY")
+    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "6mo"), "DXY")
     dxy = dxy_closes[-1] if dxy_closes else 118.0
     dxy_mom = get_dxy_momentum(dxy_closes)
     if not dxy_closes: api_errors.append("DXY")
