@@ -68,8 +68,8 @@ client = OpenAI(api_key=ENV["OPENAI_API_KEY"])
 # ==========================================
 # 🛠 유틸리티
 # ==========================================
-def pct(c, p):  return (c - p) / p * 100 if p and p != 0 else 0
-def gap(c, s):  return (c - s) / s * 100 if s and s != 0 else 0
+def pct(c, p):  return (c - p) / p * 100 if p and abs(p) > 1e-9 else 0
+def gap(c, s):  return (c - s) / s * 100 if s and abs(s) > 1e-9 else 0
 def arrow(v):   return "▲" if v > 0 else "▼" if v < 0 else "➖"
 
 def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
@@ -281,7 +281,6 @@ def get_dxy_momentum(dxy_series):
 # 📰 뉴스 키워드 추출
 # ==========================================
 def extract_news_keywords(entries, max_items=8):
-    results = []
     critical_news = []
     normal_news = []
     
@@ -304,23 +303,21 @@ def extract_news_keywords(entries, max_items=8):
         else:
             normal_news.append(f"• {title}  [{context}]")
 
-    results = (critical_news + normal_news)[:max_items]
-    return "\n".join(results)
+    return "\n".join((critical_news + normal_news)[:max_items])
 
 # ==========================================
-# 🧠 AI 분석
+# 🧠 AI 분석 (궁극의 비서 버전)
 # ==========================================
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
     prompt = f"""
-당신은 한국인 대표를 모시는 20년 경력의 퀀트 기반 매크로 전략가입니다.
-지수 ETF(VOO, QQQ) 및 분야별 ETF(SCHD, QTUM, UFO, ARKQ) 투자자를 위해 시장을 분석하세요.
+당신은 월스트리트 최고 수준의 퀀트 매크로 전략가이며, 현재 '매일 기계적으로 지수(VOO, QQQ)를 모아가며, 포트폴리오의 일부를 미래 전략산업(QTUM, UFO, NASA, ARKQ 등)에 위성 투자(Satellite)하는 투자자'를 전담 보좌하는 수석 비서입니다.
 
 [분석 원칙 - 매우 중요]
-1. [이벤트 최우선 반영] 제공된 뉴스 중 '🚨[핵심 매크로]' 태그가 붙은 연준(Fed), 금리 관련 뉴스가 있다면, 시장 파급력을 최우선 평가하여 'market_phase'와 'top_risks'에 명확히 반영하세요.
-2. 매크로 지표와 지수 추세(특히 200일선)에 집중하고 개별 종목은 무시하세요.
-3. [상관관계 분석 및 팩트 체크] 전달받은 [시장 데이터]의 수치와 함께 적힌 상태값(안정/위험 등)을 있는 그대로 직시하세요. (예: HY스프레드가 '안정'인데 위험하다고 평가하는 오류를 절대 범하지 마세요). 이를 바탕으로 달러, 국채금리, VIX, 하이일드 스프레드, 금의 흐름을 종합하여 현재 자금 이동(Risk-On/Off) 특징을 파악하세요.
-4. [대응 전략] '자동 적립식 투자를 기본으로 하되, 위험이 커질수록 현금 비중을 20% → 40% → 70% → 100%로 가속화하여 방어하는 투자자' 관점에서 전략을 제시하세요. 200일선 이탈 깊이나 핵심 매크로 이벤트의 심각성에 맞춘 구체적인 현금화 액션 플랜을 제시하세요.
-5. [언어 - 필수] 모든 분석 결과는 반드시 자연스러운 **한국어(Korean)**로 작성하세요. (JSON key는 영어로 유지하되, 내용(Value)은 무조건 한국어로 출력할 것)
+1. [매크로 최우선] 개별 기업 뉴스는 철저히 배제하세요. 제공된 뉴스 중 '🚨[핵심 매크로]' 태그가 붙은 연준(Fed), 금리, 물가 데이터에 집중하여 시장의 큰 자금 흐름(Risk-On/Off)을 진단하세요.
+2. [팩트 기반 상관관계] 전달받은 [시장 데이터]의 수치와 상태값(안정/위험 등 꼬리표)을 절대적으로 신뢰하세요. 달러, 국채금리, VIX, 하이일드 스프레드, 금 가격의 조합이 현재 증시에 어떤 심리적/구조적 영향을 미치는지 'macro_correlation'에 2~3문장으로 통찰하세요.
+3. [대응 전략 - 템포 조절] 이 봇은 위험도에 따라 현금을 20%→40%→70%→100%로 자동 가속 방어합니다. 당신이 직접 매도 비율을 지시할 필요가 없습니다. 대신 "추세가 굳건하니 맘 편히 일일 적립을 유지하십시오" 또는 "핵심 지지선 이탈 및 과열이 보이니 방어(현금화) 기제 발동에 대비해 관망할 때입니다"라고 투자자의 '마음가짐과 템포'에 집중하여 'strategy' 항목에 조언하세요.
+4. [미래 전략산업 진단] 현재의 매크로 환경(국채금리, 유동성, 위험 선호도 등)이 초고위험 성장주인 미래 전략산업(우주항공, 로봇, 양자 등)에 우호적인 환경인지, 아니면 보수적으로 접근해야 할 때인지를 분석하여 그 결과를 'opportunity' 항목에 1~2문장으로 작성하세요.
+5. [언어 - 필수] 모든 분석 결과는 반드시 자연스럽고 전문적인 **한국어(Korean)**로 출력하세요. (JSON key는 영문 유지)
 
 [시장 데이터]
 {json.dumps(market_summary, ensure_ascii=False)}
@@ -329,7 +326,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 {news}
 
 [출력: JSON만, 다른 텍스트 없음]
-{{"score":<-2~2 정수>,"market_phase":"<국면 한 줄>","top_risks":["<리스크1>","<리스크2>","<리스크3>"],"opportunity":"<기회 요인>","strategy":"<단계적 현금화 룰 기반 대응 전략>","macro_correlation":"<지표 간 상관관계 기반 시장 진단 2~3문장>"}}
+{{"score":<-2~2 정수>,"market_phase":"<국면 한 줄>","top_risks":["<리스크1>","<리스크2>","<리스크3>"],"opportunity":"<기회 요인>","strategy":"<매일 적립하는 투자자를 위한 템포 조절 및 멘탈 관리 조언>","macro_correlation":"<지표 간 상관관계 기반 시장 진단 2~3문장>"}}
 """
     res = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -350,12 +347,12 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 # ==========================================
 # 🎯 종합 위험 점수
 # ==========================================
-def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
+def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_closes, dxy_mom, ai_score,
                     us10y, fg_score, hy_spread, spy_dd, gold):
     if spy[0] == 0:
         return 2.0
     s   = 0.0
-    dxy = dxy_series[-1] if dxy_series else 118.0
+    dxy = dxy_closes[-1] if dxy_closes else 118.0
 
     if spy[0] > 0:
         spy_gap = gap(spy[0], spy[2])
@@ -392,7 +389,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, dxy_series, ai_score,
 
     if dxy > DXY["danger"]:    s += 1.5
     elif dxy > DXY["warn"]:    s += 0.5
-    dxy_mom = get_dxy_momentum(dxy_series)
+
     if dxy_mom and dxy_mom > DXY_MOM_WARN:
         s += 2.0 if dxy_mom > DXY_MOM_WARN * 1.5 else 1.0
 
@@ -428,7 +425,7 @@ def format_index(c, p, sma, _=None):
 # 🚀 메인
 # ==========================================
 def main():
-    log(f"📊 퀀텀 v5.4 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
+    log(f"📊 퀀텀 v5.5 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
     api_errors = [] 
 
     spy_raw   = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
@@ -458,14 +455,14 @@ def main():
     fg_score, fg_label = safe(lambda: get_fear_greed(), "F&G") or (None, None)
     if not fg_score: api_errors.append("공포탐욕")
 
-    vix_series = safe(lambda: get_fred_series("VIXCLS"), "VIX")
-    vix      = vix_series[-1] if vix_series else 22.0
-    if not vix_series: api_errors.append("VIX")
+    vix_closes = safe(lambda: get_yahoo_closes("^VIX", "3m"), "VIX")
+    vix = vix_closes[-1] if vix_closes else 22.0
+    if not vix_closes: api_errors.append("VIX")
 
-    dxy_series = safe(lambda: get_fred_series("DTWEXBGS"), "DXY")
-    dxy      = dxy_series[-1] if dxy_series else 118.0
-    dxy_mom = get_dxy_momentum(dxy_series)
-    if not dxy_series: api_errors.append("DXY")
+    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "3m"), "DXY")
+    dxy = dxy_closes[-1] if dxy_closes else 118.0
+    dxy_mom = get_dxy_momentum(dxy_closes)
+    if not dxy_closes: api_errors.append("DXY")
 
     spy_closes = safe(lambda: get_yahoo_closes("^GSPC", "2y"), "RSI소스")
     rsi    = calc_rsi_wilder(spy_closes) if spy_closes else None
@@ -479,7 +476,6 @@ def main():
         news_context = "뉴스 수집 실패"
         api_errors.append("뉴스")
 
-    # AI에게 넘겨주기 전, 수치에 대한 평가 꼬리표 달기
     hy_eval = "지연"
     if hy_spread and hy_spread[0]:
         hy_eval = "위험" if hy_spread[0] > HY_SPREAD_DANGER else ("주의" if hy_spread[0] > HY_SPREAD_WARN else "안정")
@@ -501,6 +497,14 @@ def main():
         "금현재가":   f"{gold[0]:.0f} ({get_gold_signal(gold)})" if gold else None,
         "RSI_SP500":  rsi,
     }
+
+    # 💡 [추가 반영] 중첩 딕셔너리 내부의 None까지 완벽하게 제거하는 필터 함수
+    def _clean(v):
+        if isinstance(v, dict):
+            return {k2: v2 for k2, v2 in v.items() if v2 is not None}
+        return v
+
+    market_summary = {k: _clean(v) for k, v in market_summary.items() if v is not None}
     
     try:
         ai = get_ai_analysis(news_context, market_summary)
@@ -510,8 +514,8 @@ def main():
         api_errors.append("AI응답")
 
     total_score = calc_risk_score(
-        spy_raw, qqq_raw, kospi_raw, fx_data, vix, dxy_series,
-        ai["score"], us10y, fg_score, hy_spread, spy_dd, gold
+        spy_raw, qqq_raw, kospi_raw, fx_data, vix, dxy_closes, dxy_mom, ai["score"],
+        us10y, fg_score, hy_spread, spy_dd, gold
     )
 
     if total_score < 3:
@@ -535,8 +539,9 @@ def main():
 
     if is_panic:
         stage_label  = "💀 패닉 구간"
-        stage_action = "폭락장 줍줍 기회 (평소 분할매수액의 2배 증액)"
-
+        weight       = 0  
+        stage_action = "기존 자산 100% 현금화 대피 + 신규 적립액 2배수 바닥 줍기"
+        
     prev        = load_state()
     prev_score  = prev.get("score", total_score)
     prev_stage  = prev.get("stage", stage_label)
@@ -582,7 +587,7 @@ def main():
     if is_panic:
         sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
-    msg = f"""🤖 퀀텀 인사이트 v5.4  |  {now_str}
+    msg = f"""🤖 퀀텀 인사이트 v5.5  |  {now_str}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
@@ -592,7 +597,7 @@ def main():
 ② {ai['top_risks'][1] if len(ai['top_risks']) > 1 else '-'}
 ③ {ai['top_risks'][2] if len(ai['top_risks']) > 2 else '-'}
 
-💡 기회 요인
+💡 기회 요인 (미래 산업 진단)
 {ai['opportunity']}
 
 🧭 대응 전략
@@ -632,10 +637,12 @@ RSI(S&P) : {get_rsi_label(rsi)}
 🛠 시스템: {sys_status_msg}
 """
 
+    msg_final = msg[:4000] + "\n...[메시지 길이 제한으로 절사됨]" if len(msg) > 4000 else msg
+
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
-            data={"chat_id": ENV["CHAT_ID"], "text": msg},
+            data={"chat_id": ENV["CHAT_ID"], "text": msg_final}, 
             timeout=15,
         )
         resp.raise_for_status()
@@ -645,7 +652,6 @@ RSI(S&P) : {get_rsi_label(rsi)}
 
     save_state(total_score, stage_label)
     log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
-
 
 if __name__ == "__main__":
     main()
