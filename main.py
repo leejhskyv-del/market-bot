@@ -164,7 +164,7 @@ def get_yahoo_stats(ticker, range_="2y"):
     return closes[-1], closes[-2], sma200, high52
 
 # ==========================================
-# 💱 환율 — 네이버 제거, 야후 단일 소스화
+# 💱 환율 — 야후 단일 소스화
 # ==========================================
 def get_fx_data():
     fx_errors = []
@@ -312,14 +312,15 @@ def extract_news_keywords(entries, max_items=8):
 # ==========================================
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
     prompt = f"""
-당신은 20년 경력의 퀀트 기반 매크로 전략가입니다.
-지수 ETF(SPY, QQQ) 및 분야별 ETF 투자자를 위해 시장을 분석하세요.
+당신은 한국인 대표를 모시는 20년 경력의 퀀트 기반 매크로 전략가입니다.
+지수 ETF(VOO, QQQ) 및 분야별 ETF(SCHD, QTUM, UFO, ARKQ) 투자자를 위해 시장을 분석하세요.
 
 [분석 원칙 - 매우 중요]
 1. [이벤트 최우선 반영] 제공된 뉴스 중 '🚨[핵심 매크로]' 태그가 붙은 연준(Fed), 금리 관련 뉴스가 있다면, 시장 파급력을 최우선 평가하여 'market_phase'와 'top_risks'에 명확히 반영하세요.
 2. 매크로 지표와 지수 추세(특히 200일선)에 집중하고 개별 종목은 무시하세요.
-3. [상관관계 분석] 달러, 국채금리, VIX, 하이일드 스프레드, 금의 흐름을 종합하여 현재 자금 이동(Risk-On/Off) 특징을 파악하세요.
-4. [대응 전략] '자동 적립식 투자를 기본으로 하되, 리스크에 따라 보유 자산을 20%씩 단계적으로 현금화하는 투자자' 관점에서 전략을 제시하세요. 200일선 이탈 또는 핵심 매크로 이벤트에 따른 액션 플랜을 구체적으로 제시하세요.
+3. [상관관계 분석 및 팩트 체크] 전달받은 [시장 데이터]의 수치와 함께 적힌 상태값(안정/위험 등)을 있는 그대로 직시하세요. (예: HY스프레드가 '안정'인데 위험하다고 평가하는 오류를 절대 범하지 마세요). 이를 바탕으로 달러, 국채금리, VIX, 하이일드 스프레드, 금의 흐름을 종합하여 현재 자금 이동(Risk-On/Off) 특징을 파악하세요.
+4. [대응 전략] '자동 적립식 투자를 기본으로 하되, 위험이 커질수록 현금 비중을 20% → 40% → 70% → 100%로 가속화하여 방어하는 투자자' 관점에서 전략을 제시하세요. 200일선 이탈 깊이나 핵심 매크로 이벤트의 심각성에 맞춘 구체적인 현금화 액션 플랜을 제시하세요.
+5. [언어 - 필수] 모든 분석 결과는 반드시 자연스러운 **한국어(Korean)**로 작성하세요. (JSON key는 영어로 유지하되, 내용(Value)은 무조건 한국어로 출력할 것)
 
 [시장 데이터]
 {json.dumps(market_summary, ensure_ascii=False)}
@@ -478,18 +479,26 @@ def main():
         news_context = "뉴스 수집 실패"
         api_errors.append("뉴스")
 
+    # AI에게 넘겨주기 전, 수치에 대한 평가 꼬리표 달기
+    hy_eval = "지연"
+    if hy_spread and hy_spread[0]:
+        hy_eval = "위험" if hy_spread[0] > HY_SPREAD_DANGER else ("주의" if hy_spread[0] > HY_SPREAD_WARN else "안정")
+        hy_eval = f"{hy_spread[0]:.2f}% ({hy_eval})"
+
+    vix_eval = "위험" if vix > VIX["danger"] else ("주의" if vix > VIX["warn"] else "안정")
+
     market_summary = {
         "SP500":      {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2),
                        "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
         "NASDAQ":     {"현재": qqq_raw[0], "전일대비%": round(pct(qqq_raw[0], qqq_raw[1]), 2)},
         "KOSPI":      {"현재": kospi_raw[0], "200일선대비%": round(gap(kospi_raw[0], kospi_raw[2]), 2) if kospi_raw[0] else None},
-        "VIX":        vix,
+        "VIX":        f"{vix:.2f} ({vix_eval})",
         "DXY":        {"현재": dxy, "20일모멘텀%": round(dxy_mom, 2) if dxy_mom else None},
         "USD_KRW":    yh_c,
         "US10Y금리":  us10y[0],
-        "HY스프레드": hy_spread[0] if hy_spread else None,
+        "HY스프레드": hy_eval,
         "공포탐욕":   fg_score,
-        "금현재가":   gold[0] if gold else None,
+        "금현재가":   f"{gold[0]:.0f} ({get_gold_signal(gold)})" if gold else None,
         "RSI_SP500":  rsi,
     }
     
@@ -505,7 +514,6 @@ def main():
         ai["score"], us10y, fg_score, hy_spread, spy_dd, gold
     )
 
-    # 💡 수정: 20% 단위 매도 룰 적용
     if total_score < 3:
         stage_label, weight = "🟢 공격적 매수", 100
         stage_action = "주식 비중 100% 유지 및 수익 극대화"
@@ -516,11 +524,11 @@ def main():
         stage_label, weight = "🟡 부분 방어", 60
         stage_action = "2차 추가 수익 실현 (자산의 40% 현금화 완료)"
     elif total_score < 12:
-        stage_label, weight = "🟠 적극적 축소", 40
-        stage_action = "보수적 운영 (자산의 60% 현금화 완료)"
+        stage_label, weight = "🟠 적극적 축소", 30
+        stage_action = "보수적 운영 (자산의 70% 현금화 완료)"
     else:
-        stage_label, weight = "🔴 위험 회피", 20
-        stage_action = "대피 및 폭풍우 관망 (80% 현금화)"
+        stage_label, weight = "🔴 위험 회피", 0
+        stage_action = "대피 및 폭풍우 관망 (100% 현금화)"
 
     is_panic        = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -4)
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
