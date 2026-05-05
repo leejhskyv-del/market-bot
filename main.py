@@ -433,7 +433,7 @@ def format_index(c, p, sma, _=None):
 # 🚀 메인
 # ==========================================
 def main():
-    log(f"📊 퀀텀 v5.5 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
+    log(f"📊 퀀텀 v6.0 가동 ({datetime.now().strftime('%Y-%m-%d %H:%M')})")
     api_errors = [] 
 
     spy_raw   = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
@@ -595,7 +595,7 @@ def main():
     if is_panic:
         sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
-    msg = f"""🤖 퀀텀 인사이트 v5.5  |  {now_str}
+    msg = f"""🤖 퀀텀 인사이트 v6.0  |  {now_str}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
