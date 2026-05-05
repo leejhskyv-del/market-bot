@@ -20,7 +20,7 @@ FG_EXTREME_FEAR  = 10
 DXY_MOM_WARN     = 3.0
 DRAWDOWN_WARN    = -10.0
 DRAWDOWN_DANGER  = -20.0
-AI_WEIGHT        = 0.7  
+AI_WEIGHT        = 0.7
 
 RETRY_COUNT = 4
 RETRY_DELAY = 45
@@ -37,12 +37,12 @@ ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
     "tariff", "trade", "bank", "earnings", "default", "yield", "debt",
     "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업",
-    "Buffett", "버핏", "Berkshire", "버크셔", 
+    "Buffett", "버핏", "Berkshire", "버크셔",
     "Druckenmiller", "드러켄밀러", "Howard Marks", "하워드 막스", "Ray Dalio", "레이 달리오"
 ]
 
 MACRO_CRITICAL = [
-    "fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike", 
+    "fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike",
     "연준", "파월", "금리", "인플레이션", "물가",
     "buffett", "버핏", "druckenmiller", "드러켄밀러", "howard marks", "하워드 막스", "ray dalio", "레이 달리오"
 ]
@@ -99,11 +99,18 @@ def load_state():
         return json.loads(res.json()['files']['bot_state.json']['content'])
     except: return {}
 
-def save_state(score, stage):
+def save_state(score, stage, fg_score=None):
     try:
         url = f"https://api.github.com/gists/{ENV['GIST_ID']}"
         headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}", "Accept": "application/vnd.github.v3+json"}
-        data = {"files": {"bot_state.json": {"content": json.dumps({"score": score, "stage": stage, "updated": datetime.now().isoformat()}, ensure_ascii=False)}}}
+        payload = {
+            "score": score,
+            "stage": stage,
+            "updated": datetime.now().isoformat(),
+        }
+        if fg_score is not None:
+            payload["fg_score"] = fg_score
+        data = {"files": {"bot_state.json": {"content": json.dumps(payload, ensure_ascii=False)}}}
         requests.patch(url, headers=headers, json=data, timeout=10).raise_for_status()
     except Exception as e: log(f"상태 저장 실패: {e}")
 
@@ -163,24 +170,38 @@ def calc_rsi_wilder(values, period=14):
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1) if avg_loss != 0 else 100.0
 
+# ==========================================
+# 😨 Fear & Greed (CNN 전용 — 코인 지수 폴백 제거)
+# ==========================================
 def get_fear_greed():
-    try:
-        res = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=CNN_HEADERS, timeout=10)
-        res.raise_for_status()
-        score = round(float(res.json()["fear_and_greed"]["score"]))
-    except Exception as e:
-        log(f"F&G CNN 실패: {e} → alternative.me 시도")
-        res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
-        res.raise_for_status()
-        score = round(float(res.json()["data"][0]["value"]))
-    
-    if score <= 10: lbl = "극단적 공포 😱🚨"
-    elif score <= 25: lbl = "극단적 공포 😱"
-    elif score <= 45: lbl = "공포 😨"
-    elif score <= 55: lbl = "중립 😐"
-    elif score <= 75: lbl = "탐욕 😏"
-    else: lbl = "극단적 탐욕 🤑"
-    return score, lbl
+    """
+    CNN Fear & Greed Index만 사용.
+    alternative.me(코인 지수) 폴백 제거 — 측정 대상이 달라 주식 분석에 부적합.
+    4회 재시도 후 모두 실패 시 None 반환 → main()에서 Gist 캐시값 사용.
+    """
+    for attempt in range(4):
+        try:
+            res = requests.get(
+                "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+                headers=CNN_HEADERS,
+                timeout=15,
+            )
+            res.raise_for_status()
+            score = round(float(res.json()["fear_and_greed"]["score"]))
+            if score <= 10:  lbl = "극단적 공포 😱🚨"
+            elif score <= 25: lbl = "극단적 공포 😱"
+            elif score <= 45: lbl = "공포 😨"
+            elif score <= 55: lbl = "중립 😐"
+            elif score <= 75: lbl = "탐욕 😏"
+            else:             lbl = "극단적 탐욕 🤑"
+            return score, lbl
+        except Exception as e:
+            log(f"⚠️ [F&G CNN] {attempt+1}차 실패: {e}")
+            if attempt < 3:
+                time.sleep(30)
+
+    log("❌ [F&G CNN] 4회 모두 실패 → None 반환")
+    return None, None
 
 def format_index(c, p, sma, _=None):
     if c == 0: return "데이터 지연"
@@ -203,10 +224,10 @@ def get_rsi_label(rsi):
 
 def get_gold_signal(gold):
     if not gold: return "지연"
-    st_gap = gap(gold[0], gold[3])   
+    st_gap = gap(gold[0], gold[3])
     if st_gap > 10: return "🚨 장기 과열"
     elif st_gap > 3: return "🟠 상승 추세"
-    elif st_gap < -5: return "🟢 저점 근접" 
+    elif st_gap < -5: return "🟢 저점 근접"
     return "➖ 중립"
 
 # ==========================================
@@ -246,14 +267,14 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 """
     res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.25, response_format={"type": "json_object"}, timeout=30)
     data = json.loads(res.choices[0].message.content.strip())
-    
+
     macro = max(-1.5, min(1.5, safe_float(data.get("macro_score", 0.0))))
     guru  = max(-0.5, min(0.5, safe_float(data.get("guru_score", 0.0))))
-    data["score"] = macro + guru 
+    data["score"] = macro + guru
 
     risks = data.get("top_risks", [])
     data["top_risks"] = ((risks if isinstance(risks, list) else [str(risks)]) + ["-", "-", "-"])[:3]
-    
+
     for k, v in {"market_phase": "분석 중", "opportunity": "-", "strategy": "관망", "macro_correlation": "지연", "guru_insight": "특이사항 없음"}.items():
         data.setdefault(k, v)
     return data
@@ -293,10 +314,9 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
     elif gap(fx_c, fx_2y) > FX_GAP["caution"]: s += 1.0
     if pct(fx_c, fx_p) > 1.5: s += 1.5
 
-    # 💡 피드백 1: VIX 추세 양방향성 처리 완료
-    if vix_trend >= 10 and vix >= VIX["warn"]: 
+    if vix_trend >= 10 and vix >= VIX["warn"]:
         s += 1.0
-    elif vix_trend <= -10: 
+    elif vix_trend <= -10:
         s -= 0.5
 
     if vix > VIX["panic"]: s += 4.0
@@ -321,26 +341,29 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
 
     if fg_score is not None:
         if fg_score > 80: s += 1.0
-        elif fg_score < FG_EXTREME_FEAR: s -= 1.5
+        elif fg_score < FG_EXTREME_FEAR:
+            if vix < VIX["warn"]:   # VIX 안정 시 F&G 감산 전부 반영
+                s -= 1.5
+            else:                   # VIX가 이미 위험 반영 중이면 절반만
+                s -= 0.5
 
     if gold and gold[3] > 0:
         gold_gap = gap(gold[0], gold[3])
-        if gold_gap > 10: s += 1.5 
-        elif gold_gap > 5: s += 0.5 
-        if dxy > 122 and gold_gap > 5: s += 1.5 
+        if gold_gap > 10: s += 1.5
+        elif gold_gap > 5: s += 0.5
+        if dxy > 122 and gold_gap > 5: s += 1.5
 
-    # 💡 피드백 2: AI 스코어 극단값 방어 (Clamping) 완료
     ai_score_clamped = max(-1.0, min(1.0, ai_score))
     s += ai_score_clamped * AI_WEIGHT
-    
+
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 v8.2 가동 시작 (The Absolute Finale)")
-    api_errors = [] 
+    log("📊 퀀텀 v8.3 가동 시작")
+    api_errors = []
 
     spy_raw = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
     if not spy_raw: spy_raw = (0, 0, 0, 0); api_errors.append("SPY")
@@ -350,28 +373,38 @@ def main():
 
     kospi_raw = safe(lambda: get_yahoo_stats("^KS11"), "KOSPI")
     if not kospi_raw: kospi_raw = (0, 0, 0, 0); api_errors.append("KOSPI")
-    
+
     fx_data = safe(lambda: get_fx_data(), "FX")
     if not fx_data: fx_data = (1400.0, 1400.0, 1400.0, 1400.0, None); api_errors.append("FX")
-    
+
     gold = safe(lambda: get_gold_data(), "GOLD")
     if not gold: api_errors.append("GOLD")
-    
+
     us10y = safe(lambda: get_us10y(), "10Y")
     if not us10y: us10y = (None, None); api_errors.append("10Y")
-    
+
     hy_spread = safe(lambda: get_hy_spread(), "HY")
     if not hy_spread: hy_spread = (None, None); api_errors.append("HY스프레드")
-    
-    _fg = safe(lambda: get_fear_greed(), "F&G")
-    fg_score, fg_label = _fg if _fg is not None else (None, None)
-    if fg_score is None: api_errors.append("공포탐욕")
-    
+
+    # ── Fear & Greed: CNN 전용, 실패 시 Gist 캐시 사용 ──
+    _fg = get_fear_greed()
+    fg_score, fg_label = _fg if _fg != (None, None) else (None, None)
+
+    if fg_score is None:
+        prev_fg = load_state().get("fg_score")
+        if prev_fg is not None:
+            fg_score = prev_fg
+            fg_label = "(전일 캐시)"
+            log(f"⚠️ F&G CNN 실패 → 전일 캐시값 사용: {fg_score}")
+            api_errors.append("공포탐욕(캐시)")
+        else:
+            api_errors.append("공포탐욕")
+
     vix_closes = safe(lambda: get_yahoo_closes("^VIX", "6mo"), "VIX")
     vix = vix_closes[-1] if vix_closes else 22.0
     vix_trend = pct(vix_closes[-1], vix_closes[-5]) if vix_closes and len(vix_closes) >= 5 else 0.0
     if not vix_closes: api_errors.append("VIX")
-    
+
     dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "6mo"), "DXY")
     dxy = dxy_closes[-1] if dxy_closes else 118.0
     dxy_mom = get_dxy_momentum(dxy_closes) if dxy_closes else None
@@ -429,14 +462,13 @@ def main():
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
     if is_panic:
-        # 💡 피드백 3: 패닉 메시지 톤다운 및 전략적 접근으로 수정 완료
         stage_label, weight, stage_action = "💀 패닉 구간", 0, "기존 자산 100% 현금화 대피 (현금 방어 유지 + 극단 구간에서만 분할 접근)"
-        total_score = SCORE_MAX  
-    elif total_score < 3: stage_label, weight, stage_action = "🟢 공격적 매수", 100, "주식 비중 100% 유지 및 수익 극대화"
-    elif total_score < 6: stage_label, weight, stage_action = "🔵 적극적 유지", 80, "1차 수익 실현 및 방어 (자산 20% 현금화)"
-    elif total_score < 9: stage_label, weight, stage_action = "🟡 부분 방어", 60, "2차 추가 수익 실현 (자산 40% 현금화)"
-    elif total_score < 12: stage_label, weight, stage_action = "🟠 적극적 축소", 30, "보수적 운영 (자산 70% 현금화)"
-    else: stage_label, weight, stage_action = "🔴 위험 회피", 0, "대피 및 폭풍우 관망 (100% 현금화)"
+        total_score = SCORE_MAX
+    elif total_score < 3:  stage_label, weight, stage_action = "🟢 공격적 매수", 100, "주식 비중 100% 유지 및 수익 극대화"
+    elif total_score < 6:  stage_label, weight, stage_action = "🔵 적극적 유지", 80,  "1차 수익 실현 및 방어 (자산 20% 현금화)"
+    elif total_score < 9:  stage_label, weight, stage_action = "🟡 부분 방어",   60,  "2차 추가 수익 실현 (자산 40% 현금화)"
+    elif total_score < 12: stage_label, weight, stage_action = "🟠 적극적 축소", 30,  "보수적 운영 (자산 70% 현금화)"
+    else:                  stage_label, weight, stage_action = "🔴 위험 회피",   0,   "대피 및 폭풍우 관망 (100% 현금화)"
 
     prev = load_state()
     prev_stage = prev.get("stage", stage_label)
@@ -445,7 +477,7 @@ def main():
     stage_change_alert = f"📢📢 국면 변화 감지!\n   {prev_stage}  →  {stage_label}\n━━━━━━━━━━━━━━━━━━\n" if prev_stage != stage_label else ""
     extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n" if is_extreme_fear else ""
     bullish_suffix = "  🔥 강세장" if spy_raw[0] > 0 and gap(spy_raw[0], spy_raw[2]) > 3 and qqq_raw[0] > 0 and gap(qqq_raw[0], qqq_raw[2]) > 3 else ""
-    
+
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_status = "⚠️ 역사적 고점권" if fx_2y_gap > FX_GAP["danger"] else "🟠 주의 수준" if fx_2y_gap > FX_GAP["caution"] else "✅ 정상 범위"
     dxy_status = "✅" if dxy < DXY["warn"] else "⚠️" if dxy < DXY["danger"] else "🚨"
@@ -454,7 +486,7 @@ def main():
     sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
-    msg = f"""🤖 퀀텀 인사이트 v8.2  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}
+    msg = f"""🤖 퀀텀 인사이트 v8.3  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
@@ -513,14 +545,18 @@ RSI(S&P) : {get_rsi_label(rsi)}
     for chunk in split_message(msg):
         for _ in range(3):
             try:
-                requests.post(f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage", data={"chat_id": ENV["CHAT_ID"], "text": chunk}, timeout=15).raise_for_status()
+                requests.post(
+                    f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
+                    data={"chat_id": ENV["CHAT_ID"], "text": chunk},
+                    timeout=15,
+                ).raise_for_status()
                 break
             except Exception as e:
                 time.sleep(2)
         else:
-            log(f"❌ 텔레그램 메시지 전송 최종 실패")
+            log("❌ 텔레그램 메시지 전송 최종 실패")
 
-    save_state(total_score, stage_label)
+    save_state(total_score, stage_label, fg_score)
     log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
 
 if __name__ == "__main__":
