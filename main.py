@@ -294,8 +294,10 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
     if pct(fx_c, fx_p) > 1.5: s += 1.5
 
     # 💡 피드백 1: VIX 추세 양방향성 처리 완료
-    if vix_trend > 10 and vix > VIX["warn"]: s += 1.0
-    elif vix_trend < -10: s -= 0.5
+    if vix_trend >= 10 and vix >= VIX["warn"]: 
+        s += 1.0
+    elif vix_trend <= -10: 
+        s -= 0.5
 
     if vix > VIX["panic"]: s += 4.0
     elif vix > VIX["danger"]: s += 2.0
@@ -423,7 +425,7 @@ def main():
 
     total_score = calc_risk_score(spy_raw, qqq_raw, kospi_raw, fx_data, vix, vix_trend, dxy, dxy_mom, ai["score"], us10y, fg_score, hy_spread, spy_dd, gold, rsi)
 
-    is_panic = vix > VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -3.5)
+    is_panic = vix >= VIX["danger"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) < -3.5)
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
     if is_panic:
