@@ -219,7 +219,13 @@ def get_fear_greed():
                 continue
 
             res.raise_for_status()
-            score = round(float(res.json()["fear_and_greed"]["score"]))
+            data = res.json()
+            if "fear_and_greed" in data and isinstance(data["fear_and_greed"], dict):
+                score = round(float(data["fear_and_greed"]["score"]))
+            elif "fear_and_greed_historical" in data and data["fear_and_greed_historical"].get("data"):
+                score = round(float(data["fear_and_greed_historical"]["data"][-1]["y"]))
+            else:
+                raise ValueError("CNN F&G JSON 구조 변경 감지")
 
             if score <= 10:  lbl = "극단적 공포 😱🚨"
             elif score <= 25: lbl = "극단적 공포 😱"
