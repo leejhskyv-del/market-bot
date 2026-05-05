@@ -36,13 +36,21 @@ CNN_HEADERS = {
     "Origin": "https://edition.cnn.com",
 }
 
+# 💡 수정: 버핏, 드러켄밀러, 하워드 막스, 레이 달리오 추가
 ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
     "tariff", "trade", "bank", "earnings", "default", "yield", "debt",
-    "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업"
+    "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업",
+    "Buffett", "버핏", "Berkshire", "버크셔", 
+    "Druckenmiller", "드러켄밀러", "Howard Marks", "하워드 막스", "Ray Dalio", "레이 달리오"
 ]
 
-MACRO_CRITICAL = ["fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike", "연준", "파월", "금리", "인플레이션", "물가"]
+# 💡 수정: 거장들의 발언을 연준(Fed) 급의 핵심 매크로로 격상
+MACRO_CRITICAL = [
+    "fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike", 
+    "연준", "파월", "금리", "인플레이션", "물가",
+    "buffett", "버핏", "druckenmiller", "드러켄밀러", "howard marks", "하워드 막스", "ray dalio", "레이 달리오"
+]
 
 # ==========================================
 # 🔑 환경변수 검증
@@ -455,6 +463,7 @@ def main():
     fg_score, fg_label = safe(lambda: get_fear_greed(), "F&G") or (None, None)
     if not fg_score: api_errors.append("공포탐욕")
 
+    # 💡 1m / 3m 데이터 부족 방지를 위해 6mo(6개월)로 넉넉하게 교체
     vix_closes = safe(lambda: get_yahoo_closes("^VIX", "6mo"), "VIX")
     vix = vix_closes[-1] if vix_closes else 22.0
     if not vix_closes: api_errors.append("VIX")
@@ -498,7 +507,6 @@ def main():
         "RSI_SP500":  rsi,
     }
 
-    # 💡 [추가 반영] 중첩 딕셔너리 내부의 None까지 완벽하게 제거하는 필터 함수
     def _clean(v):
         if isinstance(v, dict):
             return {k2: v2 for k2, v2 in v.items() if v2 is not None}
