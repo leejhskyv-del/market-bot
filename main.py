@@ -47,8 +47,6 @@ MACRO_CRITICAL = [
     "buffett", "버핏", "druckenmiller", "드러켄밀러", "howard marks", "하워드 막스", "ray dalio", "레이 달리오"
 ]
 
-# 뉴스 소스 목록 — 이름과 RSS 주소 쌍
-# 추가하고 싶으면 아래 형식으로 한 줄씩 추가하면 됩니다
 NEWS_FEEDS = [
     ("Yahoo Finance",  "https://finance.yahoo.com/news/rssindex"),
     ("CNBC 경제",      "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
@@ -181,12 +179,11 @@ def calc_rsi_wilder(values, period=14):
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1) if avg_loss != 0 else 100.0
 
 # ==========================================
-# 😨 Fear & Greed (CNN 전용 — 코인 지수 폴백 제거)
+# 😨 Fear & Greed (CNN 전용)
 # ==========================================
 def get_fear_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 
-    # 브라우저별 헤더 로테이션 (418 회피용)
     headers_list = [
         {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
@@ -208,11 +205,10 @@ def get_fear_greed():
     ]
 
     for attempt in range(4):
-        headers = headers_list[attempt % len(headers_list)]  # 헤더 번갈아 사용
+        headers = headers_list[attempt % len(headers_list)]
         try:
             res = requests.get(url, headers=headers, timeout=20)
 
-            # 418이면 에러 던지지 않고 조용히 지나치므로 직접 체크
             if res.status_code == 418:
                 log(f"⚠️ [F&G CNN] {attempt+1}차 418 Teapot → 봇 차단, 헤더 교체 후 재시도")
                 time.sleep(15)
@@ -278,7 +274,9 @@ def get_gold_signal(gold):
 def extract_news_keywords(entries, max_items=8):
     critical, normal = [], []
     for e in entries:
-        title = e.title.strip()
+        title = getattr(e, "title", "").strip()  # ✅ [수정] AttributeError 방어
+        if not title:
+            continue
         summary = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(getattr(e, "summary", "")))).strip()
         key_sents = [s.strip() for s in re.split(r'[.!?]', summary) if any(kw.lower() in s.lower() for kw in ECON_KEYWORDS)]
         context = " / ".join(key_sents[:2]) if key_sents else summary[:80]
@@ -339,7 +337,6 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
         spy_gap = gap(spy[0], spy[2])
         if spy_gap < -SPY_TREND_GAP: s += 2.0
         elif spy_gap < 0: s += 1.0
-        # 💡 [v9.0 수정] 패닉 조건 강화: 하루 -4.5% 하락 시에만 강력 개입
         if pct(spy[0], spy[1]) <= -4.0: s += 3.0
 
     if qqq[0] > 0:
@@ -362,11 +359,10 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
         if rsi > 75: s += 1.0
         elif rsi < 30: s -= 0.5
 
-    # 4. 환율 리스크 (v9.0 노이즈 완화)
+    # 4. 환율 리스크
     fx_c, fx_p, fx_1y, fx_2y, _ = fx_data
     if gap(fx_c, fx_2y) > FX_GAP["danger"]: s += 2.0
     elif gap(fx_c, fx_2y) > FX_GAP["caution"]: s += 1.0
-    # 💡 [v9.0 수정] 단순 변동 기준 상향 (1.5% -> 2.0%) 및 가중치 조절
     if pct(fx_c, fx_p) > 2.0: s += 1.0
 
     # 5. VIX 추세 및 절대값
@@ -374,7 +370,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     elif vix_trend <= -10: s -= 0.5
 
     if vix >= VIX["panic"]: s += 4.0
-    elif vix >= 30: s += 1.5   # v9.0: danger(35) 전 단계 세분화
+    elif vix >= 30: s += 1.5
     elif vix >= VIX["warn"]: s += 1.0
 
     # 6. 매크로 (달러/금리/하이일드)
@@ -384,7 +380,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
 
     if us10y and us10y[0] and us10y[1]:
         rc = us10y[0] - us10y[1]
-        if rc > 0.15: s += 1.5 # v9.0: 기준 미세 조정
+        if rc > 0.15: s += 1.5
 
     if hy_spread and hy_spread[0]:
         hys = hy_spread[0]
@@ -405,18 +401,16 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
         elif gold_gap > 5: s += 0.5
         if dxy > 122 and gold_gap > 5: s += 1.5
 
-    # 9. [v8.4/v9.0 보너스 섹션]
-    # V자 회복 모멘텀 보너스
+    # 9. 보너스 섹션
     if is_recovering:
         s -= 1.6
         log("✨ V자 회복 모멘텀 감지: 위험점수 -1.6 적용")
 
-    # 🔥 [v9.0 신규] 강세장 필터 보너스
     if is_bull_market:
         s -= 1.0
         log("🔥 강세장 필터 가동: 리스크 점수 완화 (-1.0)")
 
-    # 10. AI 분석 (v9.0 영향력 최적화)
+    # 10. AI 분석
     ai_score_clamped = max(-1.5, min(1.5, ai_score))
     s += (ai_score_clamped * AI_WEIGHT)
 
@@ -491,8 +485,8 @@ def main():
             feed = feedparser.parse(feed_url)
             count = 0
             for entry in feed.entries:
-                title = entry.title.strip()
-                if title not in seen_titles:
+                title = getattr(entry, "title", "").strip()  # ✅ [수정] getattr 방어
+                if title and title not in seen_titles:
                     seen_titles.add(title)
                     all_entries.append(entry)
                     count += 1
@@ -547,38 +541,31 @@ def main():
                   "macro_correlation": "지연", "guru_insight": "없음"}
             api_errors.append("AI응답")
 
-    # ==================== V자 반등 회복 판단 (AI와 무관하게 항상 실행) ====================
+    # ==================== V자 반등 회복 판단 ====================
     is_recovering = False
     if (spy_closes and len(spy_closes) >= 6 and 
         vix_closes and len(vix_closes) >= 10):
-        
         try:
             is_rebounding = all(spy_closes[i] > spy_closes[i-1] for i in range(-5, 0))
             vix_max = max(vix_closes[-10:])
             vix_cooling = pct(vix, vix_max) <= -15.0
-            
             if is_rebounding and vix_cooling:
                 is_recovering = True
                 log("🔥 V자 회복 신호 감지 (5일 상승 + VIX 15%↓)")
         except Exception as e:
             log(f"⚠️ V자 회복 판단 중 오류: {e}")
-    # =====================================================================
+    # ===========================================================
 
     total_score = calc_risk_score(spy_raw, qqq_raw, kospi_raw, fx_data, vix,
                                  vix_trend, dxy, dxy_mom, ai["score"], us10y,
                                  fg_score, hy_spread, spy_dd, gold, rsi,
                                  is_recovering)
 
-    # ── [v9.0 핵심] 패닉 판단 및 국면 결정 ──
-    
-    # 💡 GPT 조언 반영: VIX 45(Panic) 이상 또는 하루 -4.0% 폭락 시에만 '현금화 대피' 가동
+    # VIX 45(Panic) 이상 또는 하루 -4.0% 폭락 시에만 '현금화 대피' 가동
     is_panic = vix >= VIX["panic"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= -4.0)
-    
-    # 극단적 공포(F&G 10미만) 감지
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
     if is_panic:
-        # 패닉 시에는 점수와 상관없이 즉시 대피 모드
         stage_label, weight, stage_action = "💀 패닉 구간", 0, "기존 자산 100% 현금화 대피 (현금 방어 유지 + 극단 구간에서만 분할 접근)"
         total_score = SCORE_MAX
     elif total_score < 3:  
@@ -587,7 +574,7 @@ def main():
         stage_label, weight, stage_action = "🔵 적극적 유지", 80,  "1차 수익 실현 및 방어 (자산 20% 현금화)"
     elif total_score < 11: 
         stage_label, weight, stage_action = "🟡 부분 방어",   60,  "2차 추가 수익 실현 (자산 40% 현금화)"
-    elif total_score < 13: # v9.0: 위험 회피 구간 진입 장벽 상향
+    elif total_score < 13:
         stage_label, weight, stage_action = "🟠 적극적 축소", 30,  "보수적 운영 (자산 70% 현금화)"
     else:                  
         stage_label, weight, stage_action = "🔴 위험 회피",   0,   "대피 및 폭풍우 관망 (100% 현금화)"
@@ -608,7 +595,7 @@ def main():
     sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
-    msg = f"""🤖 퀀텀 인사이트 v9.0  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}
+    msg = f"""🤖 퀀텀 인사이트 v9.1  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
