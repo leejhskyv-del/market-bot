@@ -47,6 +47,16 @@ MACRO_CRITICAL = [
     "buffett", "버핏", "druckenmiller", "드러켄밀러", "howard marks", "하워드 막스", "ray dalio", "레이 달리오"
 ]
 
+# 뉴스 소스 목록 — 이름과 RSS 주소 쌍
+# 추가하고 싶으면 아래 형식으로 한 줄씩 추가하면 됩니다
+NEWS_FEEDS = [
+    ("Yahoo Finance",  "https://finance.yahoo.com/news/rssindex"),
+    ("CNBC 경제",      "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
+    ("CNBC 전체",      "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+    ("MarketWatch",    "https://feeds.marketwatch.com/marketwatch/topstories/"),
+    ("WSJ 마켓",       "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"),
+]
+
 # ==========================================
 # 🔑 환경변수 & 유틸리티
 # ==========================================
@@ -174,33 +184,59 @@ def calc_rsi_wilder(values, period=14):
 # 😨 Fear & Greed (CNN 전용 — 코인 지수 폴백 제거)
 # ==========================================
 def get_fear_greed():
-    """
-    CNN Fear & Greed Index만 사용.
-    alternative.me(코인 지수) 폴백 제거 — 측정 대상이 달라 주식 분석에 부적합.
-    4회 재시도 후 모두 실패 시 None 반환 → main()에서 Gist 캐시값 사용.
-    """
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+
+    # 브라우저별 헤더 로테이션 (418 회피용)
+    headers_list = [
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+            "Origin": "https://edition.cnn.com",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
+        },
+        {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.cnn.com/markets/fear-and-greed",
+            "Origin": "https://edition.cnn.com",
+        },
+    ]
+
     for attempt in range(4):
+        headers = headers_list[attempt % len(headers_list)]  # 헤더 번갈아 사용
         try:
-            res = requests.get(
-                "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
-                headers=CNN_HEADERS,
-                timeout=15,
-            )
+            res = requests.get(url, headers=headers, timeout=20)
+
+            # 418이면 에러 던지지 않고 조용히 지나치므로 직접 체크
+            if res.status_code == 418:
+                log(f"⚠️ [F&G CNN] {attempt+1}차 418 Teapot → 봇 차단, 헤더 교체 후 재시도")
+                time.sleep(15)
+                continue
+
             res.raise_for_status()
             score = round(float(res.json()["fear_and_greed"]["score"]))
+
             if score <= 10:  lbl = "극단적 공포 😱🚨"
             elif score <= 25: lbl = "극단적 공포 😱"
             elif score <= 45: lbl = "공포 😨"
             elif score <= 55: lbl = "중립 😐"
             elif score <= 75: lbl = "탐욕 😏"
             else:             lbl = "극단적 탐욕 🤑"
-            return score, lbl
-        except Exception as e:
-            log(f"⚠️ [F&G CNN] {attempt+1}차 실패: {e}")
-            if attempt < 3:
-                time.sleep(30)
 
-    log("❌ [F&G CNN] 4회 모두 실패 → None 반환")
+            log(f"✅ [F&G CNN] {attempt+1}차 성공: {score}")
+            return score, lbl
+
+        except Exception as e:
+            log(f"⚠️ [F&G CNN] {attempt+1}차 실패: {type(e).__name__}: {e}")
+            if attempt < 3:
+                time.sleep(20)
+
+    log("❌ [F&G CNN] 4회 모두 실패 → 캐시 사용")
     return None, None
 
 def format_index(c, p, sma, _=None):
@@ -414,12 +450,33 @@ def main():
     rsi = calc_rsi_wilder(spy_closes) if spy_closes else None
     spy_dd = ((spy_raw[0] - spy_raw[3]) / spy_raw[3] * 100) if spy_raw[0] and spy_raw[3] else None
 
-    try:
-        feed = feedparser.parse("https://finance.yahoo.com/news/rssindex")
-        news_context = extract_news_keywords(feed.entries)
-    except:
+    # 여러 소스에서 뉴스를 모아 중복 제거 후 분석
+    all_entries = []
+    seen_titles = set()
+    news_source_errors = []
+
+    for source_name, feed_url in NEWS_FEEDS:
+        try:
+            feed = feedparser.parse(feed_url)
+            count = 0
+            for entry in feed.entries:
+                title = entry.title.strip()
+                if title not in seen_titles:
+                    seen_titles.add(title)
+                    all_entries.append(entry)
+                    count += 1
+            log(f"✅ [{source_name}] {count}건 수집")
+        except Exception as e:
+            log(f"⚠️ [{source_name}] 뉴스 수집 실패: {e}")
+            news_source_errors.append(source_name)
+
+    if not all_entries:
         news_context = "뉴스 수집 실패"
-        api_errors.append("뉴스")
+        api_errors.append("뉴스(전체 실패)")
+    else:
+        if news_source_errors:
+            log(f"⚠️ 일부 뉴스 소스 실패: {', '.join(news_source_errors)}")
+        news_context = extract_news_keywords(all_entries)
 
     hy_eval = "지연"
     if hy_spread and hy_spread[0]:
