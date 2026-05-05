@@ -155,7 +155,7 @@ def get_yahoo_closes(ticker, range_="2y"):
 def get_yahoo_stats(ticker, range_="2y"):
     closes = get_yahoo_closes(ticker, range_)
     count = min(len(closes), 200)
-    return closes[-1], closes[-2], sum(closes[-count:]) / count, max(closes[-min(len(closes), 253):-1]) if len(closes) > 1 else closes[0]
+    return closes[-1], closes[-2], sum(closes[-count:]) / count, max(closes[-min(len(closes), 253):]) if len(closes) > 1 else closes[0]
 
 def get_dxy_momentum(dxy_closes):
     if not dxy_closes or len(dxy_closes) < 21: return None
@@ -240,7 +240,7 @@ def get_fear_greed():
         except Exception as e:
             log(f"⚠️ [F&G CNN] {attempt+1}차 실패: {type(e).__name__}: {e}")
             if attempt < 3:
-                time.sleep(20)
+                time.sleep(10)
 
     log("❌ [F&G CNN] 4회 모두 실패 → 캐시 사용")
     return None, None
@@ -417,7 +417,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
         log("🔥 강세장 필터 가동: 리스크 점수 완화 (-1.0)")
 
     # 10. AI 분석 (v9.0 영향력 최적화)
-    ai_score_clamped = max(-1.0, min(1.0, ai_score))
+    ai_score_clamped = max(-1.5, min(1.5, ai_score))
     s += (ai_score_clamped * AI_WEIGHT)
 
     return max(0.0, min(SCORE_MAX, s))
@@ -450,12 +450,15 @@ def main():
     hy_spread = safe(lambda: get_hy_spread(), "HY")
     if not hy_spread: hy_spread = (None, None); api_errors.append("HY스프레드")
 
+    # 🔹 상태 1회만 로드 (중복 호출 방지)
+    state = load_state()
+
     # ── Fear & Greed: CNN 전용, 실패 시 Gist 캐시 사용 ──
     _fg = get_fear_greed()
     fg_score, fg_label = _fg if _fg != (None, None) else (None, None)
 
     if fg_score is None:
-        prev_fg = load_state().get("fg_score")
+        prev_fg = state.get("fg_score")
         if prev_fg is not None:
             fg_score = prev_fg
             fg_label = "(전일 캐시)"
@@ -568,7 +571,7 @@ def main():
 
     # ── [v9.0 핵심] 패닉 판단 및 국면 결정 ──
     
-    # 💡 GPT 조언 반영: VIX 45(Panic) 이상 또는 하루 -4.5% 폭락 시에만 '현금화 대피' 가동
+    # 💡 GPT 조언 반영: VIX 45(Panic) 이상 또는 하루 -4.0% 폭락 시에만 '현금화 대피' 가동
     is_panic = vix >= VIX["panic"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= -4.0)
     
     # 극단적 공포(F&G 10미만) 감지
@@ -589,9 +592,9 @@ def main():
     else:                  
         stage_label, weight, stage_action = "🔴 위험 회피",   0,   "대피 및 폭풍우 관망 (100% 현금화)"
 
-    prev = load_state()
-    prev_stage = prev.get("stage", stage_label)
-    diff_str = f"{(total_score - prev.get('score', total_score)):+.1f}"
+    prev_stage = state.get("stage", stage_label)
+    prev_score = state.get("score", total_score)
+    diff_str = f"{(total_score - prev_score):+.1f}"
 
     stage_change_alert = f"📢📢 국면 변화 감지!\n   {prev_stage}  →  {stage_label}\n━━━━━━━━━━━━━━━━━━\n" if prev_stage != stage_label else ""
     extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n" if is_extreme_fear else ""
