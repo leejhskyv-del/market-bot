@@ -489,7 +489,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       
       * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', 'Tossface', -apple-system, sans-serif; }}
       /* 🔥 핵심 수정 1: 도화지 넓이를 720px로 확장해 양옆 여백 제거 */
-      body { background-color: #0B0E14; padding: 80px 20px 20px 20px; width: 720px; color: #FFFFFF; letter-spacing: -0.3px; }
+      body {{ background-color: #0B0E14; padding: 80px 20px 20px 20px; width: 720px; color: #FFFFFF; letter-spacing: -0.3px; }}
       
       /* 🔥 핵심 수정 2: 넓어진 도화지에 맞춰 디자인 요소 크기 일괄 상향 */
       .dashboard {{ background: #131722; border-radius: 24px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.06); overflow: hidden; }}
