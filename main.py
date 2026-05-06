@@ -294,7 +294,9 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 2. [상관관계] 전달받은 데이터 수치를 맹신하고 증시에 미치는 영향을 'macro_correlation'에 통찰력 있게 작성.
 3. [대응 전략] 비율(%) 숫자 금지. 투자자의 심리적 템포와 마음가짐 중심으로 'strategy' 작성.
 4. [미래 전략산업] 매크로 환경이 우주/로봇/양자에 우호적인지 'opportunity'에 1~2문장 진단.
-5. [거장 시그널 분리] 워런 버핏, 드러켄밀러 등 거장의 발언이 있다면 'guru_score'(-0.5~+0.5) 부여 및 'guru_insight' 요약. 없으면 0.0. 일반 리스크는 'macro_score'(-1.5~1.5) 부여.
+5. [거장 시그널 분리] 
+   - 점수 산정: 뉴스에 거장(버핏, 드러켄밀러 등)의 발언이 포착되면 시장에 미치는 영향에 따라 'guru_score'에 수치(-0.5~+0.5)를 반드시 부여할 것. 이 점수는 전체 위험도 계산에 합산됨.
+   - 출력 포맷: 'guru_insight' 필드에는 반드시 "[거장 이름] 요약 내용" 형식으로만 작성할 것. (예: [워런 버핏] 현금 비중 확대 중). 만약 관련 뉴스가 없다면 점수는 0.0, 내용은 "특이사항 없음"으로 출력할 것.
 6. [언어] 반드시 한국어(Korean) 출력.
 
 [시장 데이터]
@@ -621,10 +623,10 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 
       <div class="section-title">💡 퀀텀 심층 분석 & 전략</div>
       <div class="text-box">
-        <strong>[매크로 진단]</strong><br>{ai.get('macro_correlation', '-').replace(chr(10), '<br>')}<br><br>
-        <strong>[미래 산업 기회]</strong><br>{ai.get('opportunity', '-').replace(chr(10), '<br>')}<br><br>
-        <strong>[거장 시그널]</strong><br>{ai.get('guru_insight', '-').replace(chr(10), '<br>')}<br><br>
-        <strong>[대응 전략]</strong><br><span style="color:#FFF;">{ai.get('strategy', '-').replace(chr(10), '<br>')}</span>
+        <strong>⚖️ [매크로 진단]</strong><br>{ai.get('macro_correlation', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>🚀 [미래 산업 기회]</strong><br>{ai.get('opportunity', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>💬 [거장 시그널]</strong><br>{ai.get('guru_insight', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>🛡️ [대응 전략]</strong><br><span style="color:#FFF;">{ai.get('strategy', '-').replace(chr(10), '<br>')}</span>
       </div>
 
       <div class="footer">
