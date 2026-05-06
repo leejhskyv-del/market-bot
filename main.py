@@ -418,7 +418,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 🎨 이미지 생성 (v10.0 풀버전 & 데이터 복원)
+# 🎨 이미지 생성 (v10.1 초고화질 와이드 버전)
 # ==========================================
 def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str,
                         spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
@@ -445,7 +445,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     def fmt_pct(val): return f"{val:+.1f}%" if val is not None else "0.0%"
     def get_color(val): return "#00F260" if val and val > 0 else "#FF416C" if val and val < 0 else "#FFFFFF"
     
-    # 📈 지수 200일선 데이터 복원
+    # 📈 지수 200일선 데이터
     spy_p = pct(spy_raw[0], spy_raw[1])
     spy_200 = gap(spy_raw[0], spy_raw[2])
     qqq_p = pct(qqq_raw[0], qqq_raw[1])
@@ -453,12 +453,12 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     kos_p = pct(kospi_raw[0], kospi_raw[1])
     kos_200 = gap(kospi_raw[0], kospi_raw[2])
 
-    # 💵 환율 장기 갭 데이터 복원
+    # 💵 환율 장기 갭 데이터
     fx_1y_gap = gap(fx_data[0], fx_data[2])
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_status = "🚨" if fx_2y_gap > 8 else "⚠️" if fx_2y_gap > 4 else "✅"
 
-    # 🚨 VIX / 달러인덱스 이모지 상태 복원
+    # 🚨 VIX / 달러인덱스 이모지 상태
     vix_status = "🚨" if vix > 35 else "⚠️" if vix > 25 else "✅"
     dxy_status = "🚨" if dxy > 126 else "⚠️" if dxy > 122 else "✅"
 
@@ -470,45 +470,49 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
       @import url('https://cdn.jsdelivr.net/gh/toss/tossface/dist/tossface.css');
       
-      /* 토스페이스 폰트를 추가하여 리눅스 환경에서도 이모지가 예쁘게 렌더링되게 함 */
       * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', 'Tossface', -apple-system, sans-serif; }}
-      body {{ background-color: #0B0E14; padding: 20px; width: 480px; color: #FFFFFF; letter-spacing: -0.3px; }}
+      /* 💡 넓이를 480px -> 540px로 더 큼직하게 확장 */
+      body {{ background-color: #0B0E14; padding: 24px; width: 540px; color: #FFFFFF; letter-spacing: -0.3px; }}
       
-      .dashboard {{ background: #131722; border-radius: 20px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.05); overflow: hidden; }}
+      .dashboard {{ background: #131722; border-radius: 24px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.06); overflow: hidden; }}
       
-      .header {{ border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 16px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }}
-      .brand {{ font-size: 20px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
-      .time {{ font-size: 12px; color: #787B86; }}
+      .header {{ border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 18px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }}
+      /* 💡 브랜드 글씨 크기 키움 */
+      .brand {{ font-size: 24px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
+      .time {{ font-size: 13px; color: #787B86; font-weight: 500; }}
       
-      .score-wrap {{ text-align: center; margin-bottom: 20px; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
-      .score-title {{ font-size: 13px; color: #787B86; font-weight: 600; margin-bottom: 4px; }}
-      .score-val {{ font-size: 42px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 20px {bg_glow}; margin-bottom: 4px; display: flex; align-items: center; justify-content: center; gap: 6px; }}
-      .score-diff {{ font-size: 13px; color: #B2B5BE; }}
+      .score-wrap {{ text-align: center; margin-bottom: 24px; padding: 24px; background: rgba(0,0,0,0.25); border-radius: 18px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
+      .score-title {{ font-size: 15px; color: #787B86; font-weight: 600; margin-bottom: 6px; }}
+      /* 💡 메인 점수 크기 대폭 키움 (42px -> 52px) */
+      .score-val {{ font-size: 52px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 24px {bg_glow}; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; gap: 8px; }}
+      .score-diff {{ font-size: 14px; color: #B2B5BE; }}
       
-      .bar-container {{ height: 8px; background: #2A2E39; border-radius: 4px; margin: 12px 0 8px; overflow: hidden; }}
-      .bar-fill {{ height: 100%; width: {score_pct}%; background: {bar_gradient}; border-radius: 4px; box-shadow: 0 0 10px {accent_color}; }}
+      .bar-container {{ height: 10px; background: #2A2E39; border-radius: 5px; margin: 16px 0 12px; overflow: hidden; }}
+      .bar-fill {{ height: 100%; width: {score_pct}%; background: {bar_gradient}; border-radius: 5px; box-shadow: 0 0 12px {accent_color}; }}
       
-      .status-badge {{ display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: 700; background: {bg_glow}; color: {accent_color}; margin-top: 10px; }}
+      .status-badge {{ display: inline-block; padding: 8px 18px; border-radius: 20px; font-size: 16px; font-weight: 700; background: {bg_glow}; color: {accent_color}; margin-top: 10px; }}
       
-      .grid-3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 20px; }}
-      .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }}
+      .grid-3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
+      .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
       
-      .card {{ background: #1E222D; border-radius: 12px; padding: 14px; border: 1px solid rgba(255,255,255,0.04); }}
-      .c-lbl {{ font-size: 11px; color: #787B86; margin-bottom: 6px; font-weight: 600; }}
-      .c-val {{ font-size: 16px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 4px; }}
-      .c-sub {{ font-size: 12px; margin-top: 4px; font-weight: 600; }}
-      .c-sub2 {{ font-size: 10px; color: #787B86; margin-top: 3px; letter-spacing: -0.5px; }}
+      .card {{ background: #1E222D; border-radius: 14px; padding: 18px; border: 1px solid rgba(255,255,255,0.04); }}
+      .c-lbl {{ font-size: 13px; color: #787B86; margin-bottom: 6px; font-weight: 600; }}
+      /* 💡 카드 내부 수치 폰트 키움 */
+      .c-val {{ font-size: 20px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 4px; }}
+      .c-sub {{ font-size: 13px; margin-top: 6px; font-weight: 600; }}
+      .c-sub2 {{ font-size: 12px; color: #787B86; margin-top: 4px; letter-spacing: -0.5px; }}
       
-      .section-title {{ font-size: 15px; font-weight: 700; color: #FFFFFF; margin: 24px 0 12px; display: flex; align-items: center; gap: 6px; }}
+      .section-title {{ font-size: 17px; font-weight: 700; color: #FFFFFF; margin: 30px 0 14px; display: flex; align-items: center; gap: 6px; }}
       
-      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 12px; padding: 16px; font-size: 13px; color: #B2B5BE; line-height: 1.6; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 12px; }}
+      /* 💡 텍스트 가독성 대폭 향상 */
+      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 14px; padding: 20px; font-size: 15px; color: #B2B5BE; line-height: 1.7; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 16px; }}
       .text-box strong {{ color: #D1D4DC; }}
       
       .ul-list {{ list-style-type: none; }}
-      .ul-list li {{ margin-bottom: 6px; position: relative; padding-left: 14px; }}
+      .ul-list li {{ margin-bottom: 8px; position: relative; padding-left: 16px; }}
       .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; font-weight: bold; }}
       
-      .footer {{ text-align: center; font-size: 11px; color: #50535E; margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 16px; }}
+      .footer {{ text-align: center; font-size: 12px; color: #50535E; margin-top: 24px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 18px; }}
     </style>
     </head><body>
     
@@ -522,7 +526,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         <div class="score-title">시장 위험도 및 포지션</div>
         <div class="score-val">
           {total_score:.1f}
-          <span style="font-size:24px;">{ '🔥' if '강세장' in bullish_suffix else '' }</span>
+          <span style="font-size:30px;">{ '🔥' if '강세장' in bullish_suffix else '' }</span>
         </div>
         <div class="score-diff">전일 대비 {diff_str}  |  주식 {weight}% · 현금 {100-weight}%</div>
         <div class="bar-container"><div class="bar-fill"></div></div>
@@ -604,7 +608,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 
       <div class="footer">
         {sys_status_msg}<br>
-        Generated by Quantum AI Engine v10.0
+        Generated by Quantum AI Engine v10.1
       </div>
     </div>
     
@@ -614,10 +618,21 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            # 높이를 1100으로 넉넉하게 늘려 데이터가 잘리지 않게 방지
-            page = browser.new_page(viewport={"width": 480, "height": 1100})
+            
+            # 🔥 핵심 마법 1: 넓이를 540으로 넓히고, 세로를 1300으로 넉넉하게 잡음
+            # 🔥 핵심 마법 2: device_scale_factor=2.5 를 주어서 이미지를 2.5배 뻥튀기 (초고화질 Retina 해상도 적용)
+            page = browser.new_page(
+                viewport={"width": 540, "height": 1300},
+                device_scale_factor=2.5 
+            )
+            
             page.set_content(html_content)
-            page.wait_for_timeout(1000) # 폰트 로딩 대기 시간
+            
+            # 폰트가 완전히 뜰 때까지 안전하게 대기
+            page.wait_for_load_state('networkidle') 
+            page.evaluate("await document.fonts.ready") 
+            page.wait_for_timeout(1000)
+            
             path = "/tmp/quantum_full_dashboard.png"
             page.screenshot(path=path, full_page=True, omit_background=True)
             browser.close()
