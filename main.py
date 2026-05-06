@@ -107,32 +107,52 @@ def load_state():
         return json.loads(res.json()['files']['bot_state.json']['content'])
     except: return {}
 
-def save_state(score, stage, fg_score=None, vix=None, fg_raw=None, spy_pct=None):
+def save_state(score, stage, fg_score=None, vix=None, fg_raw=None, spy_pct=None,
+               spy_dd=None, dxy=None, hy_spread=None, us10y=None, fx=None, spy_current=None):
     try:
-        # 기존 상태 불러오기
         existing = load_state()
         history = existing.get("history", [])
-
-        # 오늘 데이터 추가
         today = datetime.now().strftime('%Y-%m-%d')
-        # 오늘 날짜 중복 방지
+
+        # ✅ 미래 수익률 역으로 채우기
+        if spy_current and spy_current > 0:
+            for h in history:
+                h_date = h.get("date")
+                if not h_date or not h.get("spy_current"): continue
+                try:
+                    days_ago = (datetime.strptime(today, '%Y-%m-%d') - datetime.strptime(h_date, '%Y-%m-%d')).days
+                    ret = round((spy_current - h["spy_current"]) / h["spy_current"] * 100, 2)
+                    if days_ago == 7:  h["spy_1w"] = ret
+                    if 28 <= days_ago <= 32: h["spy_1m"] = ret
+                    if 88 <= days_ago <= 92: h["spy_3m"] = ret
+                except: pass
+
+        # 오늘 중복 방지 후 추가
         history = [h for h in history if h.get("date") != today]
         history.append({
-            "date": today,
-            "score": round(score, 1),
-            "stage": stage,
-            "vix": round(vix, 1) if vix else None,
-            "fg": fg_raw,
-            "spy_pct": round(spy_pct, 2) if spy_pct else None,
+            "date":        today,
+            "score":       round(score, 1),
+            "stage":       stage,
+            "vix":         round(vix, 1) if vix else None,
+            "fg":          fg_raw,
+            "spy_pct":     round(spy_pct, 2) if spy_pct is not None else None,
+            "spy_dd":      round(spy_dd, 1) if spy_dd else None,
+            "dxy":         round(dxy, 1) if dxy else None,
+            "hy_spread":   round(hy_spread, 2) if hy_spread else None,
+            "us10y":       round(us10y, 2) if us10y else None,
+            "fx":          round(fx, 0) if fx else None,
+            "spy_current": round(spy_current, 2) if spy_current else None,
+            # 미래 수익률 — 나중에 채워짐
+            "spy_1w":  None,
+            "spy_1m":  None,
+            "spy_3m":  None,
         })
-        # 90일치만 유지
         history = history[-90:]
 
         url = f"https://api.github.com/gists/{ENV['GIST_ID']}"
         headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}", "Accept": "application/vnd.github.v3+json"}
         payload = {
-            "score": score,
-            "stage": stage,
+            "score": score, "stage": stage,
             "updated": datetime.now().isoformat(),
             "history": history,
         }
@@ -140,6 +160,7 @@ def save_state(score, stage, fg_score=None, vix=None, fg_raw=None, spy_pct=None)
             payload["fg_score"] = fg_score
         data = {"files": {"bot_state.json": {"content": json.dumps(payload, ensure_ascii=False)}}}
         requests.patch(url, headers=headers, json=data, timeout=10).raise_for_status()
+        log("✅ 상태 저장 완료 (백테스트 데이터 포함)")
     except Exception as e: log(f"상태 저장 실패: {e}")
 
 # ==========================================
@@ -749,9 +770,16 @@ RSI(S&P) : {get_rsi_label(rsi)}
         else:
             log("❌ 텔레그램 메시지 전송 최종 실패")
 
-    save_state(total_score, stage_label, fg_score, 
-           vix=vix, fg_raw=fg_score, 
-           spy_pct=pct(spy_raw[0], spy_raw[1]))
+    save_state(total_score, stage_label, fg_score,
+           vix=vix,
+           fg_raw=fg_score,
+           spy_pct=pct(spy_raw[0], spy_raw[1]),
+           spy_dd=spy_dd,
+           dxy=dxy,
+           hy_spread=hy_spread[0] if hy_spread and hy_spread[0] else None,
+           us10y=us10y[0] if us10y and us10y[0] else None,
+           fx=fx_data[0],
+           spy_current=spy_raw[0])
     log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
 
 if __name__ == "__main__":
