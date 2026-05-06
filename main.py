@@ -630,7 +630,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
             
             # 폰트가 완전히 뜰 때까지 안전하게 대기
             page.wait_for_load_state('networkidle') 
-            page.evaluate("await document.fonts.ready") 
+            page.evaluate("document.fonts.ready")  # <--- await 삭제!
             page.wait_for_timeout(1000)
             
             path = "/tmp/quantum_full_dashboard.png"
