@@ -420,7 +420,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 🎨 이미지 생성 (v10.3 플립 Z6 풀-스크린 앱 UI)
+# 🎨 이미지 생성 (v10.4 디자인 원복 & 해상도 최적화)
 # ==========================================
 def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str,
                         spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
@@ -488,21 +488,18 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       @import url('https://cdn.jsdelivr.net/gh/toss/tossface/dist/tossface.css');
       
       * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', 'Tossface', -apple-system, sans-serif; }}
-      /* 🔥 핵심 수정 1: 고정폭 삭제 및 넓이 100% 사용 */
-      body {{ background-color: #0B0E14; padding: 0; width: 100vw; height: 100vh; color: #FFFFFF; letter-spacing: -0.3px; overflow: hidden; }}
+      /* 🔥 핵심 수정 1: 도화지 넓이를 720px로 확장해 양옆 여백 제거 */
+      body {{ background-color: #0B0E14; padding: 20px; width: 720px; color: #FFFFFF; letter-spacing: -0.3px; }}
       
-      /* 🔥 핵심 수정 2: 전체 화면을 채우는 App UI 스타일 */
-      .app-ui {{ background: #131722; width: 100%; height: 100%; padding: 20px 24px 30px; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }}
-      .app-ui::-webkit-scrollbar {{ display: none; }}
+      /* 🔥 핵심 수정 2: 넓어진 도화지에 맞춰 디자인 요소 크기 일괄 상향 */
+      .dashboard {{ background: #131722; border-radius: 24px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.06); overflow: hidden; }}
       
-      .header {{ border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 18px; margin-bottom: 22px; display: flex; justify-content: space-between; align-items: flex-end; }}
-      /* 🔥 핵심 수정 3: 글씨 크기 키움 (플립 Z6 화질 활용) */
+      .header {{ border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 20px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }}
       .brand {{ font-size: 26px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
       .time {{ font-size: 14px; color: #787B86; font-weight: 500; }}
       
-      .score-wrap {{ text-align: center; margin-bottom: 22px; padding: 24px; background: rgba(0,0,0,0.3); border-radius: 20px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
+      .score-wrap {{ text-align: center; margin-bottom: 24px; padding: 24px; background: rgba(0,0,0,0.25); border-radius: 20px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
       .score-title {{ font-size: 16px; color: #787B86; font-weight: 600; margin-bottom: 6px; }}
-      /* 🔥 점수 크기 키움 */
       .score-val {{ font-size: 58px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 28px {bg_glow}; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; gap: 10px; }}
       .score-diff {{ font-size: 15px; color: #B2B5BE; }}
       
@@ -511,33 +508,32 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       
       .status-badge {{ display: inline-block; padding: 9px 20px; border-radius: 24px; font-size: 17px; font-weight: 700; background: {bg_glow}; color: {accent_color}; margin-top: 10px; }}
       
-      /* 🔥 핵심 수정 4: 그리드를 버리고 1컬럼 Stack으로 변경해 화면을 꽉 채움 */
-      .section-title {{ font-size: 18px; font-weight: 700; color: #FFFFFF; margin: 28px 0 14px; display: flex; align-items: center; gap: 8px; border-left: 3px solid {accent_color}; padding-left: 8px; }}
+      /* 🔥 핵심 수정 3: 대시보드 롤백 - 지수 현황은 3컬럼, 매크로는 2컬럼(Grid) 구조 회복 */
+      .grid-3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
+      .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
       
-      .card-stack {{ display: flex; flex-direction: column; gap: 12px; }}
+      .card {{ background: #1E222D; border-radius: 16px; padding: 20px; border: 1px solid rgba(255,255,255,0.05); }}
+      .c-lbl {{ font-size: 14px; color: #787B86; margin-bottom: 8px; font-weight: 600; }}
+      .c-val {{ font-size: 20px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 5px; }}
+      .c-sub {{ font-size: 14px; margin-top: 6px; font-weight: 600; }}
+      .c-sub2 {{ font-size: 12px; color: #787B86; margin-top: 5px; letter-spacing: -0.5px; }}
       
-      .card {{ background: #1E222D; border-radius: 16px; padding: 20px; border: 1px solid rgba(255,255,255,0.05); width: 100%; display: flex; flex-direction: column; gap: 4px; }}
-      .c-lbl {{ font-size: 14px; color: #787B86; margin-bottom: 8px; font-weight: 600; text-transform: uppercase; }}
-      .c-val-row {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; }}
-      .c-val {{ font-size: 22px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 5px; }}
-      .c-sub {{ font-size: 14px; font-weight: 600; text-align: right; }}
-      .c-sub2-wrap {{ display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 6px; }}
-      .c-sub2 {{ font-size: 13px; color: #787B86; letter-spacing: -0.5px; white-space: nowrap; }}
+      .section-title {{ font-size: 18px; font-weight: 700; color: #FFFFFF; margin: 30px 0 14px; display: flex; align-items: center; gap: 8px; }}
       
-      .text-box {{ background: rgba(30, 34, 45, 0.6); border-radius: 16px; padding: 22px; font-size: 15px; color: #B2B5BE; line-height: 1.8; border: 1px solid rgba(255,255,255,0.04); margin-bottom: 18px; }}
+      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 16px; padding: 22px; font-size: 15px; color: #B2B5BE; line-height: 1.8; border: 1px solid rgba(255,255,255,0.04); margin-bottom: 18px; }}
       .text-box strong {{ color: #D1D4DC; display: flex; align-items: center; gap: 5px; }}
       
       .ul-list {{ list-style-type: none; }}
-      .ul-list li {{ margin-bottom: 10px; position: relative; padding-left: 20px; font-size: 15px; }}
+      .ul-list li {{ margin-bottom: 10px; position: relative; padding-left: 20px; }}
       .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; font-weight: bold; font-size: 18px; }}
       
-      .footer {{ text-align: center; font-size: 13px; color: #50535E; margin-top: 26px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 18px; line-height: 1.6; }}
+      .footer {{ text-align: center; font-size: 13px; color: #50535E; margin-top: 26px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 18px; }}
     </style>
     </head><body>
     
-    <div class="app-ui">
+    <div class="dashboard">
       <div class="header">
-        <div class="brand">QUANTUM INSIGHT v10.3</div>
+        <div class="brand">QUANTUM INSIGHT <span style="font-size: 16px; color: #787B86; margin-left: 8px;">v10.4</span></div>
         <div class="time">{date_str}</div>
       </div>
 
@@ -553,98 +549,70 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       </div>
 
       <div class="section-title">📊 핵심 지수 현황</div>
-      <div class="card-stack">
+      <div class="grid-3">
         <div class="card">
           <div class="c-lbl">📈 S&P 500</div>
-          <div class="c-val-row">
-            <div class="c-val">{spy_raw[0]:,.0f}</div>
-            <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)} (1D)</div>
-          </div>
-          <div class="c-sub2-wrap">
-            <div class="c-sub2">200일선: <span style="color:{get_color(spy_200)}">{fmt_pct(spy_200)}</span></div>
-            <div class="c-sub2">고점대비 MDD: {f"{spy_dd:.1f}%" if spy_dd is not None else "-"} ({dd_str})</div>
-          </div>
+          <div class="c-val">{spy_raw[0]:,.0f}</div>
+          <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)} (1D)</div>
+          <div class="c-sub2">200일선: <span style="color:{get_color(spy_200)}">{fmt_pct(spy_200)}</span></div>
         </div>
         <div class="card">
-          <div class="c-lbl">📉 NASDAQ</div>
-          <div class="c-val-row">
-            <div class="c-val">{qqq_raw[0]:,.0f}</div>
-            <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)} (1D)</div>
-          </div>
-          <div class="c-sub2-wrap">
-            <div class="c-sub2">200일선: <span style="color:{get_color(qqq_200)}">{fmt_pct(qqq_200)}</span></div>
-          </div>
+          <div class="c-lbl">📈 NASDAQ</div>
+          <div class="c-val">{qqq_raw[0]:,.0f}</div>
+          <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)} (1D)</div>
+          <div class="c-sub2">200일선: <span style="color:{get_color(qqq_200)}">{fmt_pct(qqq_200)}</span></div>
         </div>
         <div class="card">
           <div class="c-lbl">🇰🇷 KOSPI</div>
-          <div class="c-val-row">
-            <div class="c-val">{kospi_raw[0]:,.0f}</div>
-            <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)} (1D)</div>
-          </div>
-          <div class="c-sub2-wrap">
-            <div class="c-sub2">200일선: <span style="color:{get_color(kos_200)}">{fmt_pct(kos_200)}</span></div>
-          </div>
+          <div class="c-val">{kospi_raw[0]:,.0f}</div>
+          <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)} (1D)</div>
+          <div class="c-sub2">200일선: <span style="color:{get_color(kos_200)}">{fmt_pct(kos_200)}</span></div>
         </div>
       </div>
 
       <div class="section-title">🧭 매크로 레이더</div>
-      <div class="card-stack">
+      <div class="grid-2">
         <div class="card">
           <div class="c-lbl">💵 USD/KRW 환율</div>
           <div class="c-val">{fx_data[0]:,.0f}원 {fx_status}</div>
-          <div class="c-sub2-wrap">
-            <div class="c-sub2">1년: {fx_data[2]:,.0f}원 ({fmt_pct(fx_1y_gap)})</div>
-            <div class="c-sub2">2년: {fx_data[3]:,.0f}원 ({fmt_pct(fx_2y_gap)})</div>
-          </div>
+          <div class="c-sub2">1년: {fx_data[2]:,.0f}원 ({fmt_pct(fx_1y_gap)})</div>
+          <div class="c-sub2">2년: {fx_data[3]:,.0f}원 ({fmt_pct(fx_2y_gap)})</div>
         </div>
         <div class="card">
-          <div class="c-lbl">RSI 과열도</div>
-          <div class="c-val-row">
-            <div class="c-val" style="font-size: 20px;">RSI: {f"{rsi:.1f}" if rsi is not None else "-"}</div>
-            <div class="c-sub">{rsi_str}</div>
-          </div>
+          <div class="c-lbl">📊 S&P 500 기술지표</div>
+          <div class="c-val" style="font-size: 19px;">RSI: {f"{rsi:.1f}" if rsi is not None else "-"}</div>
+          <div class="c-sub2">과열도: {rsi_str}</div>
+          <div class="c-sub2">고점대비 MDD: {f"{spy_dd:.1f}%" if spy_dd is not None else "-"} ({dd_str})</div>
         </div>
         <div class="card">
           <div class="c-lbl">🥇 안전자산 (금)</div>
-          <div class="c-val-row">
-            <div class="c-val">{f"{gold[0]:,.0f}" if gold else "지연"}</div>
-            <div class="c-sub">{gold_str}</div>
-          </div>
+          <div class="c-val">{f"{gold[0]:,.0f}" if gold else "지연"}</div>
+          <div class="c-sub2">장기 추세: {gold_str}</div>
         </div>
         <div class="card">
           <div class="c-lbl">😨 공포탐욕 지수</div>
-          <div class="c-val-row">
-            <div class="c-val">{fg_score if fg_score is not None else '지연'}</div>
-            <div class="c-sub">{fg_label if fg_label else '-'}</div>
-          </div>
+          <div class="c-val">{fg_score if fg_score is not None else '지연'}</div>
+          <div class="c-sub2">{fg_label if fg_label else '-'}</div>
         </div>
         <div class="card">
           <div class="c-lbl">📉 VIX 변동성</div>
-          <div class="c-val-row">
-            <div class="c-val">{vix:.2f} {vix_status}</div>
-            <div class="c-sub">위험 기준: 35.0</div>
-          </div>
+          <div class="c-val">{vix:.2f} {vix_status}</div>
+          <div class="c-sub2">위험 기준: 35.0 (현재 {vix_status})</div>
         </div>
         <div class="card">
           <div class="c-lbl">💲 달러 인덱스</div>
-          <div class="c-val-row">
-            <div class="c-val">{dxy:.1f} {dxy_status}</div>
-            <div class="c-sub">20D: {fmt_pct(dxy_mom)}</div>
-          </div>
+          <div class="c-val">{dxy:.1f} {dxy_status}</div>
+          <div class="c-sub2">20D 모멘텀: {fmt_pct(dxy_mom)}</div>
         </div>
         <div class="card">
           <div class="c-lbl">🏦 미 10년물 금리</div>
-          <div class="c-val-row">
-            <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
-            <div class="c-sub">1D: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
-          </div>
+          <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
+          <div class="c-sub2">1D: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
         </div>
         <div class="card">
           <div class="c-lbl">⚠️ 하이일드 스프레드</div>
-          <div class="c-val-row">
-            <div class="c-val">{hy_eval.split(' ')[0]}원</div>
-            <div class="c-sub">{hy_eval.split('(')[-1].replace(')', '') if '(' in hy_eval else '-'}</div>
-          </div>
+          <div class="c-val">{hy_eval.split(' ')[0]}</div>
+          <div class="c-sub2">상태: {hy_eval.split('(')[-1].replace(')', '') if '(' in hy_eval else '-'}</div>
         </div>
       </div>
 
@@ -667,8 +635,8 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 
       <div class="footer">
         {sys_status_msg}<br>
-        Generated by Quantum AI Engine v10.3<br>
-        Designed for Galaxy Flip Z6 (v10.3)
+        Generated by Quantum AI Engine v10.4<br>
+        Optimized for High-Res Screens
       </div>
     </div>
     
@@ -679,11 +647,11 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         with sync_playwright() as p:
             browser = p.chromium.launch()
             
-            # 🔥 핵심 수정 5: Playwright 카메라 렌즈 설정 (더 넓게, 더 길게!)
-            # 🔥 Device Scale Factor는 플립 Z6 해상도에 맞춰 3.0으로 상향!
+            # 🔥 핵심 수정 4: Playwright 카메라 렌즈 설정 (더 넓게, 더 길게!)
+            # 🔥 Device Scale Factor는 극한의 고화질을 위해 3.5로 상향!
             page = browser.new_page(
-                viewport={"width": 420, "height": 1800}, 
-                device_scale_factor=3.0
+                viewport={"width": 720, "height": 2200}, 
+                device_scale_factor=3.5
             )
             
             page.set_content(html_content)
@@ -694,7 +662,6 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
             page.wait_for_timeout(1000)
             
             path = "/tmp/quantum_full_dashboard.png"
-            # 🔥 omit_background=True로 해서 양옆 검은 여백을 아예 없애버림
             page.screenshot(path=path, full_page=True, omit_background=True)
             browser.close()
             return path
