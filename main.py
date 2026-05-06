@@ -420,7 +420,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 🎨 이미지 생성 (v10.2 꽉 찬 데이터 & 와이드 8구역)
+# 🎨 이미지 생성 (v10.3 플립 Z6 풀-스크린 앱 UI)
 # ==========================================
 def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str,
                         spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
@@ -429,7 +429,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     
     score_pct = (total_score / 15.0) * 100
     
-    # 핀테크 스타일 컬러셋
+    # 컬러셋
     if total_score < 7:
         bar_gradient = "linear-gradient(90deg, #00F260 0%, #0575E6 100%)"
         accent_color = "#00F260"
@@ -447,7 +447,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     def fmt_pct(val): return f"{val:+.1f}%" if val is not None else "0.0%"
     def get_color(val): return "#00F260" if val and val > 0 else "#FF416C" if val and val < 0 else "#FFFFFF"
     
-    # 📈 지수 200일선 데이터
+    # 지수 200일선 데이터
     spy_p = pct(spy_raw[0], spy_raw[1])
     spy_200 = gap(spy_raw[0], spy_raw[2])
     qqq_p = pct(qqq_raw[0], qqq_raw[1])
@@ -455,29 +455,29 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     kos_p = pct(kospi_raw[0], kospi_raw[1])
     kos_200 = gap(kospi_raw[0], kospi_raw[2])
 
-    # 💵 환율 장기 갭 데이터
+    # 환율 장기 갭 데이터
     fx_1y_gap = gap(fx_data[0], fx_data[2])
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_status = "🚨" if fx_2y_gap > 8 else "⚠️" if fx_2y_gap > 4 else "✅"
 
-    # 🚨 VIX / 달러인덱스 상태
+    # VIX / 달러인덱스 상태
     vix_status = "🚨" if vix > 35 else "⚠️" if vix > 25 else "✅"
     dxy_status = "🚨" if dxy > 126 else "⚠️" if dxy > 122 else "✅"
 
-    # 🥇 금(Gold) 상태 텍스트화
+    # 금 상태
     gold_str = "지연"
     if gold and len(gold) > 3 and gold[3] > 0:
         st_gap = gap(gold[0], gold[3])
-        gold_str = "🚨 장기 과열" if st_gap > 10 else "🟠 상승 추세" if st_gap > 3 else "🟢 저점 근접" if st_gap < -5 else "➖ 중립"
+        gold_str = "🚨 과열" if st_gap > 10 else "🟠 상승" if st_gap > 3 else "🟢 저점" if st_gap < -5 else "➖ 중립"
 
-    # 📉 RSI 및 고점대비(MDD) 텍스트화
+    # RSI 및 MDD 상태
     rsi_str = "지연"
     if rsi is not None:
         rsi_str = "🔴 과매수" if rsi >= 75 else "🟠 상단" if rsi >= 60 else "🟢 과매도" if rsi <= 25 else "🔵 하단" if rsi <= 40 else "➖ 중립"
         
     dd_str = "지연"
     if spy_dd is not None:
-        dd_str = "💀 대형 조정" if spy_dd <= -20 else "🔴 조정 구간" if spy_dd <= -10 else "🟠 소폭 하락" if spy_dd <= -5 else "🟢 고점 근접"
+        dd_str = "💀 대형조정" if spy_dd <= -20 else "🔴 조정" if spy_dd <= -10 else "🟠 소폭하락" if spy_dd <= -5 else "🟢 고점근접"
 
     risks = ai.get('top_risks', ["-", "-", "-"])
     
@@ -488,48 +488,56 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       @import url('https://cdn.jsdelivr.net/gh/toss/tossface/dist/tossface.css');
       
       * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', 'Tossface', -apple-system, sans-serif; }}
-      body {{ background-color: #0B0E14; padding: 24px; width: 540px; color: #FFFFFF; letter-spacing: -0.3px; }}
+      /* 🔥 핵심 수정 1: 고정폭 삭제 및 넓이 100% 사용 */
+      body {{ background-color: #0B0E14; padding: 0; width: 100vw; height: 100vh; color: #FFFFFF; letter-spacing: -0.3px; overflow: hidden; }}
       
-      .dashboard {{ background: #131722; border-radius: 24px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.06); overflow: hidden; }}
+      /* 🔥 핵심 수정 2: 전체 화면을 채우는 App UI 스타일 */
+      .app-ui {{ background: #131722; width: 100%; height: 100%; padding: 20px 24px 30px; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }}
+      .app-ui::-webkit-scrollbar {{ display: none; }}
       
-      .header {{ border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 18px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }}
-      .brand {{ font-size: 24px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
-      .time {{ font-size: 13px; color: #787B86; font-weight: 500; }}
+      .header {{ border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 18px; margin-bottom: 22px; display: flex; justify-content: space-between; align-items: flex-end; }}
+      /* 🔥 핵심 수정 3: 글씨 크기 키움 (플립 Z6 화질 활용) */
+      .brand {{ font-size: 26px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
+      .time {{ font-size: 14px; color: #787B86; font-weight: 500; }}
       
-      .score-wrap {{ text-align: center; margin-bottom: 24px; padding: 24px; background: rgba(0,0,0,0.25); border-radius: 18px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
-      .score-title {{ font-size: 15px; color: #787B86; font-weight: 600; margin-bottom: 6px; }}
-      .score-val {{ font-size: 52px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 24px {bg_glow}; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; gap: 8px; }}
-      .score-diff {{ font-size: 14px; color: #B2B5BE; }}
+      .score-wrap {{ text-align: center; margin-bottom: 22px; padding: 24px; background: rgba(0,0,0,0.3); border-radius: 20px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
+      .score-title {{ font-size: 16px; color: #787B86; font-weight: 600; margin-bottom: 6px; }}
+      /* 🔥 점수 크기 키움 */
+      .score-val {{ font-size: 58px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 28px {bg_glow}; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; gap: 10px; }}
+      .score-diff {{ font-size: 15px; color: #B2B5BE; }}
       
-      .bar-container {{ height: 10px; background: #2A2E39; border-radius: 5px; margin: 16px 0 12px; overflow: hidden; }}
-      .bar-fill {{ height: 100%; width: {score_pct}%; background: {bar_gradient}; border-radius: 5px; box-shadow: 0 0 12px {accent_color}; }}
+      .bar-container {{ height: 12px; background: #2A2E39; border-radius: 6px; margin: 18px 0 12px; overflow: hidden; }}
+      .bar-fill {{ height: 100%; width: {score_pct}%; background: {bar_gradient}; border-radius: 6px; box-shadow: 0 0 14px {accent_color}; }}
       
-      .status-badge {{ display: inline-block; padding: 8px 18px; border-radius: 20px; font-size: 16px; font-weight: 700; background: {bg_glow}; color: {accent_color}; margin-top: 10px; }}
+      .status-badge {{ display: inline-block; padding: 9px 20px; border-radius: 24px; font-size: 17px; font-weight: 700; background: {bg_glow}; color: {accent_color}; margin-top: 10px; }}
       
-      .grid-3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
-      .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }}
+      /* 🔥 핵심 수정 4: 그리드를 버리고 1컬럼 Stack으로 변경해 화면을 꽉 채움 */
+      .section-title {{ font-size: 18px; font-weight: 700; color: #FFFFFF; margin: 28px 0 14px; display: flex; align-items: center; gap: 8px; border-left: 3px solid {accent_color}; padding-left: 8px; }}
       
-      .card {{ background: #1E222D; border-radius: 14px; padding: 18px; border: 1px solid rgba(255,255,255,0.04); }}
-      .c-lbl {{ font-size: 13px; color: #787B86; margin-bottom: 6px; font-weight: 600; }}
-      .c-val {{ font-size: 20px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 4px; }}
-      .c-sub {{ font-size: 13px; margin-top: 6px; font-weight: 600; }}
-      .c-sub2 {{ font-size: 12px; color: #787B86; margin-top: 4px; letter-spacing: -0.5px; }}
+      .card-stack {{ display: flex; flex-direction: column; gap: 12px; }}
       
-      .section-title {{ font-size: 17px; font-weight: 700; color: #FFFFFF; margin: 30px 0 14px; display: flex; align-items: center; gap: 6px; }}
+      .card {{ background: #1E222D; border-radius: 16px; padding: 20px; border: 1px solid rgba(255,255,255,0.05); width: 100%; display: flex; flex-direction: column; gap: 4px; }}
+      .c-lbl {{ font-size: 14px; color: #787B86; margin-bottom: 8px; font-weight: 600; text-transform: uppercase; }}
+      .c-val-row {{ display: flex; justify-content: space-between; align-items: center; gap: 12px; }}
+      .c-val {{ font-size: 22px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 5px; }}
+      .c-sub {{ font-size: 14px; font-weight: 600; text-align: right; }}
+      .c-sub2-wrap {{ display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 6px; }}
+      .c-sub2 {{ font-size: 13px; color: #787B86; letter-spacing: -0.5px; white-space: nowrap; }}
       
-      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 14px; padding: 20px; font-size: 14px; color: #B2B5BE; line-height: 1.7; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 16px; }}
-      .text-box strong {{ color: #D1D4DC; }}
+      .text-box {{ background: rgba(30, 34, 45, 0.6); border-radius: 16px; padding: 22px; font-size: 15px; color: #B2B5BE; line-height: 1.8; border: 1px solid rgba(255,255,255,0.04); margin-bottom: 18px; }}
+      .text-box strong {{ color: #D1D4DC; display: flex; align-items: center; gap: 5px; }}
       
       .ul-list {{ list-style-type: none; }}
-      .ul-list li {{ margin-bottom: 8px; position: relative; padding-left: 16px; }}
-      .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; font-weight: bold; }}
+      .ul-list li {{ margin-bottom: 10px; position: relative; padding-left: 20px; font-size: 15px; }}
+      .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; font-weight: bold; font-size: 18px; }}
       
-      .footer {{ text-align: center; font-size: 12px; color: #50535E; margin-top: 24px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 18px; }}
+      .footer {{ text-align: center; font-size: 13px; color: #50535E; margin-top: 26px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 18px; line-height: 1.6; }}
     </style>
     </head><body>
     
-    <div class="header">
-        <div class="brand">QUANTUM INSIGHT <span style="font-size: 14px; font-weight: 600; color: #787B86; margin-left: 6px;">v10.2</span></div>
+    <div class="app-ui">
+      <div class="header">
+        <div class="brand">QUANTUM INSIGHT v10.3</div>
         <div class="time">{date_str}</div>
       </div>
 
@@ -537,7 +545,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         <div class="score-title">시장 위험도 및 포지션</div>
         <div class="score-val">
           {total_score:.1f}
-          <span style="font-size:30px;">{ '🔥' if '강세장' in bullish_suffix else '' }</span>
+          <span style="font-size:36px;">{ '🔥' if '강세장' in bullish_suffix else '' }</span>
         </div>
         <div class="score-diff">전일 대비 {diff_str}  |  주식 {weight}% · 현금 {100-weight}%</div>
         <div class="bar-container"><div class="bar-fill"></div></div>
@@ -545,70 +553,98 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       </div>
 
       <div class="section-title">📊 핵심 지수 현황</div>
-      <div class="grid-3">
+      <div class="card-stack">
         <div class="card">
-          <div class="c-lbl">S&P 500</div>
-          <div class="c-val">{spy_raw[0]:,.0f}</div>
-          <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)} (1D)</div>
-          <div class="c-sub2">200일선: <span style="color:{get_color(spy_200)}">{fmt_pct(spy_200)}</span></div>
+          <div class="c-lbl">📈 S&P 500</div>
+          <div class="c-val-row">
+            <div class="c-val">{spy_raw[0]:,.0f}</div>
+            <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)} (1D)</div>
+          </div>
+          <div class="c-sub2-wrap">
+            <div class="c-sub2">200일선: <span style="color:{get_color(spy_200)}">{fmt_pct(spy_200)}</span></div>
+            <div class="c-sub2">고점대비 MDD: {f"{spy_dd:.1f}%" if spy_dd is not None else "-"} ({dd_str})</div>
+          </div>
         </div>
         <div class="card">
-          <div class="c-lbl">NASDAQ</div>
-          <div class="c-val">{qqq_raw[0]:,.0f}</div>
-          <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)} (1D)</div>
-          <div class="c-sub2">200일선: <span style="color:{get_color(qqq_200)}">{fmt_pct(qqq_200)}</span></div>
+          <div class="c-lbl">📉 NASDAQ</div>
+          <div class="c-val-row">
+            <div class="c-val">{qqq_raw[0]:,.0f}</div>
+            <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)} (1D)</div>
+          </div>
+          <div class="c-sub2-wrap">
+            <div class="c-sub2">200일선: <span style="color:{get_color(qqq_200)}">{fmt_pct(qqq_200)}</span></div>
+          </div>
         </div>
         <div class="card">
-          <div class="c-lbl">KOSPI</div>
-          <div class="c-val">{kospi_raw[0]:,.0f}</div>
-          <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)} (1D)</div>
-          <div class="c-sub2">200일선: <span style="color:{get_color(kos_200)}">{fmt_pct(kos_200)}</span></div>
+          <div class="c-lbl">🇰🇷 KOSPI</div>
+          <div class="c-val-row">
+            <div class="c-val">{kospi_raw[0]:,.0f}</div>
+            <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)} (1D)</div>
+          </div>
+          <div class="c-sub2-wrap">
+            <div class="c-sub2">200일선: <span style="color:{get_color(kos_200)}">{fmt_pct(kos_200)}</span></div>
+          </div>
         </div>
       </div>
 
       <div class="section-title">🧭 매크로 레이더</div>
-      <div class="grid-2">
+      <div class="card-stack">
         <div class="card">
           <div class="c-lbl">💵 USD/KRW 환율</div>
           <div class="c-val">{fx_data[0]:,.0f}원 {fx_status}</div>
-          <div class="c-sub2">1년: {fx_data[2]:,.0f}원 ({fmt_pct(fx_1y_gap)})</div>
-          <div class="c-sub2">2년: {fx_data[3]:,.0f}원 ({fmt_pct(fx_2y_gap)})</div>
+          <div class="c-sub2-wrap">
+            <div class="c-sub2">1년: {fx_data[2]:,.0f}원 ({fmt_pct(fx_1y_gap)})</div>
+            <div class="c-sub2">2년: {fx_data[3]:,.0f}원 ({fmt_pct(fx_2y_gap)})</div>
+          </div>
         </div>
         <div class="card">
-          <div class="c-lbl">📊 S&P 500 기술지표</div>
-          <div class="c-val" style="font-size: 18px;">RSI: {f"{rsi:.1f}" if rsi is not None else "-"}</div>
-          <div class="c-sub2">과열도: {rsi_str}</div>
-          <div class="c-sub2">고점대비: {f"{spy_dd:.1f}%" if spy_dd is not None else "-"} ({dd_str})</div>
+          <div class="c-lbl">RSI 과열도</div>
+          <div class="c-val-row">
+            <div class="c-val" style="font-size: 20px;">RSI: {f"{rsi:.1f}" if rsi is not None else "-"}</div>
+            <div class="c-sub">{rsi_str}</div>
+          </div>
         </div>
         <div class="card">
           <div class="c-lbl">🥇 안전자산 (금)</div>
-          <div class="c-val">{f"{gold[0]:,.0f}" if gold else "지연"}</div>
-          <div class="c-sub2">장기 추세: {gold_str}</div>
+          <div class="c-val-row">
+            <div class="c-val">{f"{gold[0]:,.0f}" if gold else "지연"}</div>
+            <div class="c-sub">{gold_str}</div>
+          </div>
         </div>
         <div class="card">
           <div class="c-lbl">😨 공포탐욕 지수</div>
-          <div class="c-val">{fg_score if fg_score is not None else '지연'}</div>
-          <div class="c-sub2">{fg_label if fg_label else '-'}</div>
+          <div class="c-val-row">
+            <div class="c-val">{fg_score if fg_score is not None else '지연'}</div>
+            <div class="c-sub">{fg_label if fg_label else '-'}</div>
+          </div>
         </div>
         <div class="card">
           <div class="c-lbl">📉 VIX 변동성</div>
-          <div class="c-val">{vix:.2f} {vix_status}</div>
-          <div class="c-sub2">위험 기준: 35.0 (현재 {vix_status})</div>
+          <div class="c-val-row">
+            <div class="c-val">{vix:.2f} {vix_status}</div>
+            <div class="c-sub">위험 기준: 35.0</div>
+          </div>
         </div>
         <div class="card">
           <div class="c-lbl">💲 달러 인덱스</div>
-          <div class="c-val">{dxy:.1f} {dxy_status}</div>
-          <div class="c-sub2">20일 모멘텀: {fmt_pct(dxy_mom)}</div>
+          <div class="c-val-row">
+            <div class="c-val">{dxy:.1f} {dxy_status}</div>
+            <div class="c-sub">20D: {fmt_pct(dxy_mom)}</div>
+          </div>
         </div>
         <div class="card">
           <div class="c-lbl">🏦 미 10년물 금리</div>
-          <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
-          <div class="c-sub2">전일 대비: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
+          <div class="c-val-row">
+            <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
+            <div class="c-sub">1D: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
+          </div>
         </div>
         <div class="card">
           <div class="c-lbl">⚠️ 하이일드 스프레드</div>
-          <div class="c-val">{hy_eval.split(' ')[0]}</div>
-          <div class="c-sub2">상태: {hy_eval.split('(')[-1].replace(')', '') if '(' in hy_eval else '-'}</div>
+          <div class="c-val-row">
+            <div class="c-val">{hy_eval.split(' ')[0]}원</div>
+            <div class="c-sub">{hy_eval.split('(')[-1].replace(')', '') if '(' in hy_eval else '-'}</div>
+          </div>
         </div>
       </div>
 
@@ -623,15 +659,16 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 
       <div class="section-title">💡 퀀텀 심층 분석 & 전략</div>
       <div class="text-box">
-        <strong>⚖️ [매크로 진단]</strong><br>{ai.get('macro_correlation', '-').replace(chr(10), '<br>')}<br><br>
-        <strong>🚀 [미래 산업 기회]</strong><br>{ai.get('opportunity', '-').replace(chr(10), '<br>')}<br><br>
-        <strong>💬 [거장 시그널]</strong><br>{ai.get('guru_insight', '-').replace(chr(10), '<br>')}<br><br>
-        <strong>🛡️ [대응 전략]</strong><br><span style="color:#FFF;">{ai.get('strategy', '-').replace(chr(10), '<br>')}</span>
+        <strong>🔭 [매크로 진단]</strong><br>{ai.get('macro_correlation', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>🛸 [미래 산업 기회]</strong><br>{ai.get('opportunity', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>🦉 [거장 시그널]</strong><br>{ai.get('guru_insight', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>🎯 [대응 전략]</strong><br><span style="color:#FFF;">{ai.get('strategy', '-').replace(chr(10), '<br>')}</span>
       </div>
 
       <div class="footer">
         {sys_status_msg}<br>
-        Generated by Quantum AI Engine v10.2
+        Generated by Quantum AI Engine v10.3<br>
+        Designed for Galaxy Flip Z6 (v10.3)
       </div>
     </div>
     
@@ -642,20 +679,22 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         with sync_playwright() as p:
             browser = p.chromium.launch()
             
-            # 🔥 높이를 1400px으로 더 넉넉하게 늘려서 8구역 데이터가 짤리지 않게 방어
+            # 🔥 핵심 수정 5: Playwright 카메라 렌즈 설정 (더 넓게, 더 길게!)
+            # 🔥 Device Scale Factor는 플립 Z6 해상도에 맞춰 3.0으로 상향!
             page = browser.new_page(
-                viewport={"width": 540, "height": 1400},
-                device_scale_factor=2.5 
+                viewport={"width": 420, "height": 1800}, 
+                device_scale_factor=3.0
             )
             
             page.set_content(html_content)
             
-            # 에러 났던 await 뺀 버전 유지!
+            # 폰트 로딩 안전 대기
             page.wait_for_load_state('networkidle') 
             page.evaluate("document.fonts.ready") 
             page.wait_for_timeout(1000)
             
             path = "/tmp/quantum_full_dashboard.png"
+            # 🔥 omit_background=True로 해서 양옆 검은 여백을 아예 없애버림
             page.screenshot(path=path, full_page=True, omit_background=True)
             browser.close()
             return path
