@@ -418,7 +418,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 🎨 이미지 생성 (v10.0 풀버전 인포그래픽)
+# 🎨 이미지 생성 (v10.0 풀버전 & 데이터 복원)
 # ==========================================
 def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str,
                         spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
@@ -441,13 +441,26 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         accent_color = "#FF416C"
         bg_glow = "rgba(255, 65, 108, 0.15)"
 
-    # 데이터 포맷팅 헬퍼
-    def fmt_pct(val): return f"{val:+.1f}%" if val else "0.0%"
+    # 데이터 헬퍼 함수
+    def fmt_pct(val): return f"{val:+.1f}%" if val is not None else "0.0%"
     def get_color(val): return "#00F260" if val and val > 0 else "#FF416C" if val and val < 0 else "#FFFFFF"
     
+    # 📈 지수 200일선 데이터 복원
     spy_p = pct(spy_raw[0], spy_raw[1])
+    spy_200 = gap(spy_raw[0], spy_raw[2])
     qqq_p = pct(qqq_raw[0], qqq_raw[1])
+    qqq_200 = gap(qqq_raw[0], qqq_raw[2])
     kos_p = pct(kospi_raw[0], kospi_raw[1])
+    kos_200 = gap(kospi_raw[0], kospi_raw[2])
+
+    # 💵 환율 장기 갭 데이터 복원
+    fx_1y_gap = gap(fx_data[0], fx_data[2])
+    fx_2y_gap = gap(fx_data[0], fx_data[3])
+    fx_status = "🚨" if fx_2y_gap > 8 else "⚠️" if fx_2y_gap > 4 else "✅"
+
+    # 🚨 VIX / 달러인덱스 이모지 상태 복원
+    vix_status = "🚨" if vix > 35 else "⚠️" if vix > 25 else "✅"
+    dxy_status = "🚨" if dxy > 126 else "⚠️" if dxy > 122 else "✅"
 
     risks = ai.get('top_risks', ["-", "-", "-"])
     
@@ -455,7 +468,10 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     <html><head><meta charset="utf-8">
     <style>
       @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-      * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', sans-serif; }}
+      @import url('https://cdn.jsdelivr.net/gh/toss/tossface/dist/tossface.css');
+      
+      /* 토스페이스 폰트를 추가하여 리눅스 환경에서도 이모지가 예쁘게 렌더링되게 함 */
+      * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', 'Tossface', -apple-system, sans-serif; }}
       body {{ background-color: #0B0E14; padding: 20px; width: 480px; color: #FFFFFF; letter-spacing: -0.3px; }}
       
       .dashboard {{ background: #131722; border-radius: 20px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.05); overflow: hidden; }}
@@ -464,9 +480,9 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       .brand {{ font-size: 20px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
       .time {{ font-size: 12px; color: #787B86; }}
       
-      .score-wrap {{ text-align: center; margin-bottom: 20px; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid rgba(255,255,255,0.03); }}
+      .score-wrap {{ text-align: center; margin-bottom: 20px; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
       .score-title {{ font-size: 13px; color: #787B86; font-weight: 600; margin-bottom: 4px; }}
-      .score-val {{ font-size: 42px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 20px {bg_glow}; margin-bottom: 4px; }}
+      .score-val {{ font-size: 42px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 20px {bg_glow}; margin-bottom: 4px; display: flex; align-items: center; justify-content: center; gap: 6px; }}
       .score-diff {{ font-size: 13px; color: #B2B5BE; }}
       
       .bar-container {{ height: 8px; background: #2A2E39; border-radius: 4px; margin: 12px 0 8px; overflow: hidden; }}
@@ -478,18 +494,19 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }}
       
       .card {{ background: #1E222D; border-radius: 12px; padding: 14px; border: 1px solid rgba(255,255,255,0.04); }}
-      .c-lbl {{ font-size: 11px; color: #787B86; margin-bottom: 4px; text-transform: uppercase; }}
-      .c-val {{ font-size: 16px; font-weight: 700; color: #D1D4DC; }}
-      .c-sub {{ font-size: 11px; margin-top: 2px; }}
+      .c-lbl {{ font-size: 11px; color: #787B86; margin-bottom: 6px; font-weight: 600; }}
+      .c-val {{ font-size: 16px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 4px; }}
+      .c-sub {{ font-size: 12px; margin-top: 4px; font-weight: 600; }}
+      .c-sub2 {{ font-size: 10px; color: #787B86; margin-top: 3px; letter-spacing: -0.5px; }}
       
-      .section-title {{ font-size: 14px; font-weight: 700; color: #FFFFFF; margin: 24px 0 12px; border-left: 3px solid {accent_color}; padding-left: 8px; }}
+      .section-title {{ font-size: 15px; font-weight: 700; color: #FFFFFF; margin: 24px 0 12px; display: flex; align-items: center; gap: 6px; }}
       
       .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 12px; padding: 16px; font-size: 13px; color: #B2B5BE; line-height: 1.6; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 12px; }}
       .text-box strong {{ color: #D1D4DC; }}
       
       .ul-list {{ list-style-type: none; }}
       .ul-list li {{ margin-bottom: 6px; position: relative; padding-left: 14px; }}
-      .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; }}
+      .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; font-weight: bold; }}
       
       .footer {{ text-align: center; font-size: 11px; color: #50535E; margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 16px; }}
     </style>
@@ -503,10 +520,13 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 
       <div class="score-wrap">
         <div class="score-title">시장 위험도 및 포지션</div>
-        <div class="score-val">{total_score:.1f}</div>
+        <div class="score-val">
+          {total_score:.1f}
+          <span style="font-size:24px;">{ '🔥' if '강세장' in bullish_suffix else '' }</span>
+        </div>
         <div class="score-diff">전일 대비 {diff_str}  |  주식 {weight}% · 현금 {100-weight}%</div>
         <div class="bar-container"><div class="bar-fill"></div></div>
-        <div class="status-badge">{stage_label}{bullish_suffix}</div>
+        <div class="status-badge">{stage_label} {bullish_suffix.replace('🔥', '').strip()}</div>
       </div>
 
       <div class="section-title">📊 핵심 지수 현황</div>
@@ -514,31 +534,58 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         <div class="card">
           <div class="c-lbl">S&P 500</div>
           <div class="c-val">{spy_raw[0]:,.0f}</div>
-          <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)}</div>
+          <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)} (1D)</div>
+          <div class="c-sub2">200일선: <span style="color:{get_color(spy_200)}">{fmt_pct(spy_200)}</span></div>
         </div>
         <div class="card">
           <div class="c-lbl">NASDAQ</div>
           <div class="c-val">{qqq_raw[0]:,.0f}</div>
-          <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)}</div>
+          <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)} (1D)</div>
+          <div class="c-sub2">200일선: <span style="color:{get_color(qqq_200)}">{fmt_pct(qqq_200)}</span></div>
         </div>
         <div class="card">
           <div class="c-lbl">KOSPI</div>
           <div class="c-val">{kospi_raw[0]:,.0f}</div>
-          <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)}</div>
+          <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)} (1D)</div>
+          <div class="c-sub2">200일선: <span style="color:{get_color(kos_200)}">{fmt_pct(kos_200)}</span></div>
         </div>
       </div>
 
       <div class="section-title">🧭 매크로 레이더</div>
       <div class="grid-2">
-        <div class="card"><div class="c-lbl">USD/KRW 환율</div><div class="c-val">{fx_data[0]:,.0f}원</div></div>
-        <div class="card"><div class="c-lbl">VIX 변동성</div><div class="c-val">{vix:.2f}</div></div>
-        <div class="card"><div class="c-lbl">공포탐욕 지수</div><div class="c-val">{fg_score if fg_score is not None else '지연'}</div></div>
-        <div class="card"><div class="c-lbl">미 10년물 금리</div><div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div></div>
-        <div class="card"><div class="c-lbl">달러 인덱스</div><div class="c-val">{dxy:.1f}</div></div>
-        <div class="card"><div class="c-lbl">하이일드 스프레드</div><div class="c-val">{hy_eval.split(' ')[0]}</div></div>
+        <div class="card">
+          <div class="c-lbl">💵 USD/KRW 환율</div>
+          <div class="c-val">{fx_data[0]:,.0f}원 {fx_status}</div>
+          <div class="c-sub2">1년 {fmt_pct(fx_1y_gap)} | 2년 {fmt_pct(fx_2y_gap)}</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">📉 VIX 변동성</div>
+          <div class="c-val">{vix:.2f} {vix_status}</div>
+          <div class="c-sub2">위험 기준: 35.0 (현재 {vix_status})</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">😨 공포탐욕 지수</div>
+          <div class="c-val">{fg_score if fg_score is not None else '지연'}</div>
+          <div class="c-sub2">{fg_label if fg_label else '-'}</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">🏦 미 10년물 금리</div>
+          <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
+          <div class="c-sub2">전일 대비: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">💲 달러 인덱스</div>
+          <div class="c-val">{dxy:.1f} {dxy_status}</div>
+          <div class="c-sub2">20일 모멘텀: {fmt_pct(dxy_mom)}</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">⚠️ 하이일드 스프레드</div>
+          <div class="c-val">{hy_eval.split(' ')[0]}</div>
+          <div class="c-sub2">상태: {hy_eval.split('(')[-1].replace(')', '') if '(' in hy_eval else '-'}</div>
+        </div>
       </div>
 
-      <div class="section-title">⚠️ Top 3 거시경제 리스크</div>
+      <div class="section-title">🚨 Top 3 거시경제 리스크</div>
       <div class="text-box">
         <ul class="ul-list">
           <li>{risks[0] if len(risks) > 0 else '-'}</li>
@@ -567,9 +614,10 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={"width": 480, "height": 800}) # height는 넉넉하게
+            # 높이를 1100으로 넉넉하게 늘려 데이터가 잘리지 않게 방지
+            page = browser.new_page(viewport={"width": 480, "height": 1100})
             page.set_content(html_content)
-            page.wait_for_timeout(1000) # 렌더링 대기 시간 약간 증가
+            page.wait_for_timeout(1000) # 폰트 로딩 대기 시간
             path = "/tmp/quantum_full_dashboard.png"
             page.screenshot(path=path, full_page=True, omit_background=True)
             browser.close()
