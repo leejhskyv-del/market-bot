@@ -418,12 +418,16 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 🎨 이미지 생성 (v10.0 프리미엄 모던 UI)
+# 🎨 이미지 생성 (v10.0 풀버전 인포그래픽)
 # ==========================================
-def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str):
+def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str,
+                        spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
+                        fx_data, fg_score, fg_label, vix, dxy, dxy_mom, us10y, hy_eval, gold,
+                        sys_status_msg, bullish_suffix):
+    
     score_pct = (total_score / 15.0) * 100
     
-    # 핀테크 스타일의 세련된 네온 그라데이션 컬러
+    # 핀테크 스타일 컬러셋
     if total_score < 7:
         bar_gradient = "linear-gradient(90deg, #00F260 0%, #0575E6 100%)"
         accent_color = "#00F260"
@@ -437,58 +441,57 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         accent_color = "#FF416C"
         bg_glow = "rgba(255, 65, 108, 0.15)"
 
-    risks = ai.get('top_risks', ["-", "-", "-"])
-    r1 = risks[0] if len(risks) > 0 else "-"
-    r2 = risks[1] if len(risks) > 1 else "-"
-    r3 = risks[2] if len(risks) > 2 else "-"
+    # 데이터 포맷팅 헬퍼
+    def fmt_pct(val): return f"{val:+.1f}%" if val else "0.0%"
+    def get_color(val): return "#00F260" if val and val > 0 else "#FF416C" if val and val < 0 else "#FFFFFF"
+    
+    spy_p = pct(spy_raw[0], spy_raw[1])
+    qqq_p = pct(qqq_raw[0], qqq_raw[1])
+    kos_p = pct(kospi_raw[0], kospi_raw[1])
 
+    risks = ai.get('top_risks', ["-", "-", "-"])
+    
     html_content = f"""
     <html><head><meta charset="utf-8">
     <style>
       @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-      * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', -apple-system, sans-serif; }}
-      body {{ background-color: #0B0E14; padding: 30px; width: 480px; color: #FFFFFF; letter-spacing: -0.3px; }}
+      * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', sans-serif; }}
+      body {{ background-color: #0B0E14; padding: 20px; width: 480px; color: #FFFFFF; letter-spacing: -0.3px; }}
       
-      /* 메인 컨테이너 */
-      .dashboard {{ background: #131722; border-radius: 24px; padding: 28px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05); position: relative; overflow: hidden; }}
-      .dashboard::before {{ content: ''; position: absolute; top: -50px; right: -50px; width: 150px; height: 150px; background: {accent_color}; filter: blur(100px); opacity: 0.3; border-radius: 50%; }}
+      .dashboard {{ background: #131722; border-radius: 20px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.05); overflow: hidden; }}
       
-      /* 헤더 */
-      .header {{ display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 16px; }}
-      .brand {{ font-size: 22px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
-      .time {{ font-size: 13px; color: #787B86; font-weight: 500; }}
+      .header {{ border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 16px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end; }}
+      .brand {{ font-size: 20px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
+      .time {{ font-size: 12px; color: #787B86; }}
       
-      /* 메인 점수 영역 */
-      .score-wrap {{ text-align: center; margin-bottom: 24px; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid rgba(255,255,255,0.03); }}
-      .score-title {{ font-size: 14px; color: #787B86; font-weight: 600; margin-bottom: 8px; }}
-      .score-val {{ font-size: 48px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 20px {bg_glow}; margin-bottom: 4px; }}
-      .score-diff {{ font-size: 14px; color: #B2B5BE; font-weight: 500; }}
+      .score-wrap {{ text-align: center; margin-bottom: 20px; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid rgba(255,255,255,0.03); }}
+      .score-title {{ font-size: 13px; color: #787B86; font-weight: 600; margin-bottom: 4px; }}
+      .score-val {{ font-size: 42px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 20px {bg_glow}; margin-bottom: 4px; }}
+      .score-diff {{ font-size: 13px; color: #B2B5BE; }}
       
-      /* 세련된 프로그레스 바 */
-      .bar-container {{ height: 10px; background: #2A2E39; border-radius: 10px; margin: 16px 0 8px; overflow: hidden; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }}
-      .bar-fill {{ height: 100%; width: {score_pct}%; background: {bar_gradient}; border-radius: 10px; box-shadow: 0 0 10px {accent_color}; }}
-      .bar-labels {{ display: flex; justify-content: space-between; font-size: 12px; color: #787B86; font-weight: 600; }}
+      .bar-container {{ height: 8px; background: #2A2E39; border-radius: 4px; margin: 12px 0 8px; overflow: hidden; }}
+      .bar-fill {{ height: 100%; width: {score_pct}%; background: {bar_gradient}; border-radius: 4px; box-shadow: 0 0 10px {accent_color}; }}
       
-      /* 배지 및 액션 */
-      .status-badge {{ display: inline-block; padding: 8px 16px; border-radius: 20px; font-size: 15px; font-weight: 700; background: {bg_glow}; color: {accent_color}; border: 1px solid rgba(255,255,255,0.1); margin-top: 12px; }}
+      .status-badge {{ display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: 700; background: {bg_glow}; color: {accent_color}; margin-top: 10px; }}
       
-      /* 비중 카드 (스플릿) */
-      .split-cards {{ display: flex; gap: 12px; margin-bottom: 24px; }}
-      .mini-card {{ flex: 1; background: #1E222D; border-radius: 16px; padding: 16px; text-align: center; border: 1px solid rgba(255,255,255,0.04); }}
-      .mini-label {{ font-size: 12px; color: #787B86; font-weight: 600; margin-bottom: 6px; }}
-      .mini-val {{ font-size: 24px; font-weight: 800; color: #FFFFFF; }}
-      .val-stock {{ color: #00F260; }} .val-cash {{ color: #00C3FF; }}
+      .grid-3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 20px; }}
+      .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }}
       
-      /* 정보 섹션 */
-      .info-sec {{ margin-bottom: 20px; }}
-      .sec-title {{ font-size: 14px; font-weight: 700; color: #D1D4DC; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }}
-      .sec-box {{ background: #1E222D; border-radius: 14px; padding: 16px; font-size: 14px; color: #A3A6AF; line-height: 1.6; border: 1px solid rgba(255,255,255,0.04); }}
+      .card {{ background: #1E222D; border-radius: 12px; padding: 14px; border: 1px solid rgba(255,255,255,0.04); }}
+      .c-lbl {{ font-size: 11px; color: #787B86; margin-bottom: 4px; text-transform: uppercase; }}
+      .c-val {{ font-size: 16px; font-weight: 700; color: #D1D4DC; }}
+      .c-sub {{ font-size: 11px; margin-top: 2px; }}
       
-      .risk-item {{ display: flex; align-items: flex-start; margin-bottom: 8px; }}
-      .risk-item:last-child {{ margin-bottom: 0; }}
-      .dot {{ color: #FF416C; margin-right: 8px; font-weight: bold; }}
+      .section-title {{ font-size: 14px; font-weight: 700; color: #FFFFFF; margin: 24px 0 12px; border-left: 3px solid {accent_color}; padding-left: 8px; }}
       
-      .footer {{ text-align: center; font-size: 11px; color: #50535E; margin-top: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }}
+      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 12px; padding: 16px; font-size: 13px; color: #B2B5BE; line-height: 1.6; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 12px; }}
+      .text-box strong {{ color: #D1D4DC; }}
+      
+      .ul-list {{ list-style-type: none; }}
+      .ul-list li {{ margin-bottom: 6px; position: relative; padding-left: 14px; }}
+      .ul-list li::before {{ content: '•'; position: absolute; left: 0; color: {accent_color}; }}
+      
+      .footer {{ text-align: center; font-size: 11px; color: #50535E; margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 16px; }}
     </style>
     </head><body>
     
@@ -499,42 +502,63 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       </div>
 
       <div class="score-wrap">
-        <div class="score-title">현재 시장 위험도 점수</div>
+        <div class="score-title">시장 위험도 및 포지션</div>
         <div class="score-val">{total_score:.1f}</div>
-        <div class="score-diff">전일 대비 {diff_str}</div>
-        
+        <div class="score-diff">전일 대비 {diff_str}  |  주식 {weight}% · 현금 {100-weight}%</div>
         <div class="bar-container"><div class="bar-fill"></div></div>
-        <div class="bar-labels"><span>매수 (Safe)</span><span>대피 (Danger)</span></div>
-        
-        <div class="status-badge">{stage_label}</div>
+        <div class="status-badge">{stage_label}{bullish_suffix}</div>
       </div>
 
-      <div class="split-cards">
-        <div class="mini-card">
-          <div class="mini-label">주식 권장 비중</div>
-          <div class="mini-val val-stock">{weight}%</div>
+      <div class="section-title">📊 핵심 지수 현황</div>
+      <div class="grid-3">
+        <div class="card">
+          <div class="c-lbl">S&P 500</div>
+          <div class="c-val">{spy_raw[0]:,.0f}</div>
+          <div class="c-sub" style="color:{get_color(spy_p)}">{fmt_pct(spy_p)}</div>
         </div>
-        <div class="mini-card">
-          <div class="mini-label">현금 대기 비중</div>
-          <div class="mini-val val-cash">{100 - weight}%</div>
+        <div class="card">
+          <div class="c-lbl">NASDAQ</div>
+          <div class="c-val">{qqq_raw[0]:,.0f}</div>
+          <div class="c-sub" style="color:{get_color(qqq_p)}">{fmt_pct(qqq_p)}</div>
         </div>
-      </div>
-
-      <div class="info-sec">
-        <div class="sec-title">⚠️ 탑 매크로 리스크</div>
-        <div class="sec-box">
-          <div class="risk-item"><span class="dot">•</span>{r1}</div>
-          <div class="risk-item"><span class="dot">•</span>{r2}</div>
-          <div class="risk-item"><span class="dot">•</span>{r3}</div>
+        <div class="card">
+          <div class="c-lbl">KOSPI</div>
+          <div class="c-val">{kospi_raw[0]:,.0f}</div>
+          <div class="c-sub" style="color:{get_color(kos_p)}">{fmt_pct(kos_p)}</div>
         </div>
       </div>
 
-      <div class="info-sec">
-        <div class="sec-title">💡 퀀텀 투자 전략 요약</div>
-        <div class="sec-box">{ai.get('strategy', '관망')}</div>
+      <div class="section-title">🧭 매크로 레이더</div>
+      <div class="grid-2">
+        <div class="card"><div class="c-lbl">USD/KRW 환율</div><div class="c-val">{fx_data[0]:,.0f}원</div></div>
+        <div class="card"><div class="c-lbl">VIX 변동성</div><div class="c-val">{vix:.2f}</div></div>
+        <div class="card"><div class="c-lbl">공포탐욕 지수</div><div class="c-val">{fg_score if fg_score is not None else '지연'}</div></div>
+        <div class="card"><div class="c-lbl">미 10년물 금리</div><div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div></div>
+        <div class="card"><div class="c-lbl">달러 인덱스</div><div class="c-val">{dxy:.1f}</div></div>
+        <div class="card"><div class="c-lbl">하이일드 스프레드</div><div class="c-val">{hy_eval.split(' ')[0]}</div></div>
       </div>
-      
-      <div class="footer">Powered by Quantum AI Engine v10.0</div>
+
+      <div class="section-title">⚠️ Top 3 거시경제 리스크</div>
+      <div class="text-box">
+        <ul class="ul-list">
+          <li>{risks[0] if len(risks) > 0 else '-'}</li>
+          <li>{risks[1] if len(risks) > 1 else '-'}</li>
+          <li>{risks[2] if len(risks) > 2 else '-'}</li>
+        </ul>
+      </div>
+
+      <div class="section-title">💡 퀀텀 심층 분석 & 전략</div>
+      <div class="text-box">
+        <strong>[매크로 진단]</strong><br>{ai.get('macro_correlation', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>[미래 산업 기회]</strong><br>{ai.get('opportunity', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>[거장 시그널]</strong><br>{ai.get('guru_insight', '-').replace(chr(10), '<br>')}<br><br>
+        <strong>[대응 전략]</strong><br><span style="color:#FFF;">{ai.get('strategy', '-').replace(chr(10), '<br>')}</span>
+      </div>
+
+      <div class="footer">
+        {sys_status_msg}<br>
+        Generated by Quantum AI Engine v10.0
+      </div>
     </div>
     
     </body></html>
@@ -543,12 +567,11 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            # 세련된 디자인에 맞춰 뷰포트 여유있게 설정
-            page = browser.new_page(viewport={"width": 480, "height": 950})
+            page = browser.new_page(viewport={"width": 480, "height": 800}) # height는 넉넉하게
             page.set_content(html_content)
-            page.wait_for_timeout(500)
-            path = "/tmp/quantum_premium_dashboard.png"
-            page.screenshot(path=path, full_page=True, omit_background=True) # 배경 투명화
+            page.wait_for_timeout(1000) # 렌더링 대기 시간 약간 증가
+            path = "/tmp/quantum_full_dashboard.png"
+            page.screenshot(path=path, full_page=True, omit_background=True)
             browser.close()
             return path
     except Exception as e:
@@ -728,9 +751,11 @@ def main():
     sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
+    # ----- [맨 밑바닥 교체할 부분 시작] -----
+    
     date_str = datetime.now().strftime('%Y.%m.%d %H:%M')
     
-    # 1. 텍스트 메시지 구성 (이미지 밑에 달릴 상세 설명)
+    # 만약 이미지 생성이 실패할 때를 대비한 텍스트 백업 (기존과 동일)
     msg = f"""🤖 퀀텀 인사이트 v10.0  |  {date_str}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면: {ai['market_phase']}{bullish_suffix}
@@ -749,35 +774,33 @@ USD/KRW  : {fx_data[0]:,.0f}원
 🛠 시스템: {sys_status_msg}
 """
 
-    # 2. 멋진 대시보드 이미지 만들기
-    image_path = generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str)
+    # 🔥 모든 데이터를 담아서 '풀버전' 이미지 생성 요청!
+    image_path = generate_card_image(
+        total_score, stage_label, ai, weight, diff_str, date_str,
+        spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
+        fx_data, fg_score, fg_label, vix, dxy, dxy_mom, us10y, hy_eval, gold,
+        sys_status_msg, bullish_suffix
+    )
 
-    # 3. 텔레그램으로 전송하기
-    if image_path: # 이미지가 성공적으로 만들어졌다면?
+    # 3. 텔레그램으로 전송하기 (이미지만 깔끔하게!)
+    if image_path: 
         with open(image_path, "rb") as f:
             for _ in range(3):
                 try:
-                    # 사진 먼저 전송
                     requests.post(
                         f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendPhoto",
-                        data={"chat_id": ENV["CHAT_ID"], "caption": "📊 v10.0 프리미엄 분석 리포트 도착"},
+                        data={"chat_id": ENV["CHAT_ID"]}, # caption(텍스트) 뺐습니다! 사진만 갑니다.
                         files={"photo": f},
                         timeout=20,
                     ).raise_for_status()
-                    
-                    # 사진 전송 성공하면 상세 텍스트도 이어서 전송
-                    requests.post(
-                        f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
-                        data={"chat_id": ENV["CHAT_ID"], "text": msg},
-                        timeout=15,
-                    )
-                    break
+                    # 🎯 사진 전송에 성공하면 여기서 끝! 텍스트는 보내지 않습니다.
+                    break 
                 except Exception as e:
                     log(f"⚠️ 이미지 전송 실패: {e}")
                     time.sleep(2)
     else:
-        # 혹시라도 이미지 생성에 실패했다면? 예전처럼 텍스트만 전송 (안전장치)
-        log("⚠️ 카드 생성 실패, 텍스트 리포트만 전송합니다.")
+        # 혹시라도 이미지 생성에 실패했다면? 그때만 텍스트 리포트 전송
+        log("⚠️ 이미지 생성 실패, 텍스트 리포트 백업을 전송합니다.")
         def split_message(text, max_len=3900):
             return [text[i:i+max_len] for i in range(0, len(text), max_len)]
         for chunk in split_message(msg):
@@ -789,6 +812,7 @@ USD/KRW  : {fx_data[0]:,.0f}원
 
     save_state(total_score, stage_label, fg_score)
     log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
+    # ----- [여기까지 끝] -----
 
 if __name__ == "__main__":
     main()
