@@ -867,31 +867,38 @@ USD/KRW  : {fx_data[0]:,.0f}원
 
     # 3. 텔레그램으로 전송하기 (이미지만 깔끔하게!)
     if image_path: 
-        with open(image_path, "rb") as f:
-            for _ in range(3):
-                try:
+        for _ in range(3):
+            try:
+                # 🔥 파일을 열고 보내는 작업을 반복문 안으로 넣어서, 실패 시 처음부터 다시 읽게 함
+                with open(image_path, "rb") as f:
                     requests.post(
                         f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendPhoto",
-                        data={"chat_id": ENV["CHAT_ID"]}, # caption(텍스트) 뺐습니다! 사진만 갑니다.
+                        data={"chat_id": ENV["CHAT_ID"]}, 
                         files={"photo": f},
-                        timeout=20,
+                        timeout=60, # 🔥 고화질 이미지를 위해 대기 시간을 20초 -> 60초로 대폭 연장
                     ).raise_for_status()
-                    # 🎯 사진 전송에 성공하면 여기서 끝! 텍스트는 보내지 않습니다.
-                    break 
-                except Exception as e:
-                    log(f"⚠️ 이미지 전송 실패: {e}")
-                    time.sleep(2)
+                # 전송 성공하면 반복문 탈출!
+                break 
+            except Exception as e:
+                log(f"⚠️ 이미지 전송 실패: {e}")
+                time.sleep(3)
     else:
         # 혹시라도 이미지 생성에 실패했다면? 그때만 텍스트 리포트 전송
         log("⚠️ 이미지 생성 실패, 텍스트 리포트 백업을 전송합니다.")
         def split_message(text, max_len=3900):
             return [text[i:i+max_len] for i in range(0, len(text), max_len)]
         for chunk in split_message(msg):
-            requests.post(
-                f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
-                data={"chat_id": ENV["CHAT_ID"], "text": chunk},
-                timeout=15,
-            )
+            for _ in range(3):
+                try:
+                    requests.post(
+                        f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
+                        data={"chat_id": ENV["CHAT_ID"], "text": chunk},
+                        timeout=15,
+                    ).raise_for_status()
+                    break
+                except Exception as e:
+                    log(f"⚠️ 텍스트 전송 실패: {e}")
+                    time.sleep(3)
 
     save_state(total_score, stage_label, fg_score)
     log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
