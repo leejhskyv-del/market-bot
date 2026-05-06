@@ -665,7 +665,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 v10.0 가동 시작")
+    log("📊 퀀텀 v10.2 가동 시작")
     api_errors = []
 
     spy_raw = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
@@ -839,7 +839,7 @@ def main():
     date_str = datetime.now().strftime('%Y.%m.%d %H:%M')
     
     # 만약 이미지 생성이 실패할 때를 대비한 텍스트 백업 (기존과 동일)
-    msg = f"""🤖 퀀텀 인사이트 v10.0  |  {date_str}
+    msg = f"""🤖 퀀텀 인사이트 v10.2  |  {date_str}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면: {ai['market_phase']}{bullish_suffix}
 🚦 권장 행동: {stage_action}
