@@ -418,7 +418,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
     return max(0.0, min(SCORE_MAX, s))
 
 # ==========================================
-# 🎨 이미지 생성 (v10.1 초고화질 와이드 버전)
+# 🎨 이미지 생성 (v10.2 꽉 찬 데이터 & 와이드 8구역)
 # ==========================================
 def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str,
                         spy_raw, qqq_raw, kospi_raw, spy_dd, rsi,
@@ -458,9 +458,24 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_status = "🚨" if fx_2y_gap > 8 else "⚠️" if fx_2y_gap > 4 else "✅"
 
-    # 🚨 VIX / 달러인덱스 이모지 상태
+    # 🚨 VIX / 달러인덱스 상태
     vix_status = "🚨" if vix > 35 else "⚠️" if vix > 25 else "✅"
     dxy_status = "🚨" if dxy > 126 else "⚠️" if dxy > 122 else "✅"
+
+    # 🥇 금(Gold) 상태 텍스트화
+    gold_str = "지연"
+    if gold and len(gold) > 3 and gold[3] > 0:
+        st_gap = gap(gold[0], gold[3])
+        gold_str = "🚨 장기 과열" if st_gap > 10 else "🟠 상승 추세" if st_gap > 3 else "🟢 저점 근접" if st_gap < -5 else "➖ 중립"
+
+    # 📉 RSI 및 고점대비(MDD) 텍스트화
+    rsi_str = "지연"
+    if rsi is not None:
+        rsi_str = "🔴 과매수" if rsi >= 75 else "🟠 상단" if rsi >= 60 else "🟢 과매도" if rsi <= 25 else "🔵 하단" if rsi <= 40 else "➖ 중립"
+        
+    dd_str = "지연"
+    if spy_dd is not None:
+        dd_str = "💀 대형 조정" if spy_dd <= -20 else "🔴 조정 구간" if spy_dd <= -10 else "🟠 소폭 하락" if spy_dd <= -5 else "🟢 고점 근접"
 
     risks = ai.get('top_risks', ["-", "-", "-"])
     
@@ -471,19 +486,16 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       @import url('https://cdn.jsdelivr.net/gh/toss/tossface/dist/tossface.css');
       
       * {{ margin:0; padding:0; box-sizing:border-box; font-family: 'Pretendard', 'Tossface', -apple-system, sans-serif; }}
-      /* 💡 넓이를 480px -> 540px로 더 큼직하게 확장 */
       body {{ background-color: #0B0E14; padding: 24px; width: 540px; color: #FFFFFF; letter-spacing: -0.3px; }}
       
       .dashboard {{ background: #131722; border-radius: 24px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.06); overflow: hidden; }}
       
       .header {{ border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 18px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }}
-      /* 💡 브랜드 글씨 크기 키움 */
       .brand {{ font-size: 24px; font-weight: 800; background: linear-gradient(90deg, #fff, #aaa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
       .time {{ font-size: 13px; color: #787B86; font-weight: 500; }}
       
       .score-wrap {{ text-align: center; margin-bottom: 24px; padding: 24px; background: rgba(0,0,0,0.25); border-radius: 18px; border: 1px solid rgba(255,255,255,0.03); position: relative; }}
       .score-title {{ font-size: 15px; color: #787B86; font-weight: 600; margin-bottom: 6px; }}
-      /* 💡 메인 점수 크기 대폭 키움 (42px -> 52px) */
       .score-val {{ font-size: 52px; font-weight: 800; color: {accent_color}; line-height: 1; text-shadow: 0 0 24px {bg_glow}; margin-bottom: 6px; display: flex; align-items: center; justify-content: center; gap: 8px; }}
       .score-diff {{ font-size: 14px; color: #B2B5BE; }}
       
@@ -497,15 +509,13 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
       
       .card {{ background: #1E222D; border-radius: 14px; padding: 18px; border: 1px solid rgba(255,255,255,0.04); }}
       .c-lbl {{ font-size: 13px; color: #787B86; margin-bottom: 6px; font-weight: 600; }}
-      /* 💡 카드 내부 수치 폰트 키움 */
       .c-val {{ font-size: 20px; font-weight: 700; color: #D1D4DC; display: flex; align-items: center; gap: 4px; }}
       .c-sub {{ font-size: 13px; margin-top: 6px; font-weight: 600; }}
       .c-sub2 {{ font-size: 12px; color: #787B86; margin-top: 4px; letter-spacing: -0.5px; }}
       
       .section-title {{ font-size: 17px; font-weight: 700; color: #FFFFFF; margin: 30px 0 14px; display: flex; align-items: center; gap: 6px; }}
       
-      /* 💡 텍스트 가독성 대폭 향상 */
-      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 14px; padding: 20px; font-size: 15px; color: #B2B5BE; line-height: 1.7; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 16px; }}
+      .text-box {{ background: rgba(30, 34, 45, 0.5); border-radius: 14px; padding: 20px; font-size: 14px; color: #B2B5BE; line-height: 1.7; border: 1px solid rgba(255,255,255,0.03); margin-bottom: 16px; }}
       .text-box strong {{ color: #D1D4DC; }}
       
       .ul-list {{ list-style-type: none; }}
@@ -516,9 +526,8 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
     </style>
     </head><body>
     
-    <div class="dashboard">
-      <div class="header">
-        <div class="brand">QUANTUM INSIGHT</div>
+    <div class="header">
+        <div class="brand">QUANTUM INSIGHT <span style="font-size: 14px; font-weight: 600; color: #787B86; margin-left: 6px;">v10.2</span></div>
         <div class="time">{date_str}</div>
       </div>
 
@@ -560,12 +569,19 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         <div class="card">
           <div class="c-lbl">💵 USD/KRW 환율</div>
           <div class="c-val">{fx_data[0]:,.0f}원 {fx_status}</div>
-          <div class="c-sub2">1년 {fmt_pct(fx_1y_gap)} | 2년 {fmt_pct(fx_2y_gap)}</div>
+          <div class="c-sub2">1년: {fx_data[2]:,.0f}원 ({fmt_pct(fx_1y_gap)})</div>
+          <div class="c-sub2">2년: {fx_data[3]:,.0f}원 ({fmt_pct(fx_2y_gap)})</div>
         </div>
         <div class="card">
-          <div class="c-lbl">📉 VIX 변동성</div>
-          <div class="c-val">{vix:.2f} {vix_status}</div>
-          <div class="c-sub2">위험 기준: 35.0 (현재 {vix_status})</div>
+          <div class="c-lbl">📊 S&P 500 기술지표</div>
+          <div class="c-val" style="font-size: 18px;">RSI: {f"{rsi:.1f}" if rsi is not None else "-"}</div>
+          <div class="c-sub2">과열도: {rsi_str}</div>
+          <div class="c-sub2">고점대비: {f"{spy_dd:.1f}%" if spy_dd is not None else "-"} ({dd_str})</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">🥇 안전자산 (금)</div>
+          <div class="c-val">{f"{gold[0]:,.0f}" if gold else "지연"}</div>
+          <div class="c-sub2">장기 추세: {gold_str}</div>
         </div>
         <div class="card">
           <div class="c-lbl">😨 공포탐욕 지수</div>
@@ -573,14 +589,19 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
           <div class="c-sub2">{fg_label if fg_label else '-'}</div>
         </div>
         <div class="card">
-          <div class="c-lbl">🏦 미 10년물 금리</div>
-          <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
-          <div class="c-sub2">전일 대비: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
+          <div class="c-lbl">📉 VIX 변동성</div>
+          <div class="c-val">{vix:.2f} {vix_status}</div>
+          <div class="c-sub2">위험 기준: 35.0 (현재 {vix_status})</div>
         </div>
         <div class="card">
           <div class="c-lbl">💲 달러 인덱스</div>
           <div class="c-val">{dxy:.1f} {dxy_status}</div>
           <div class="c-sub2">20일 모멘텀: {fmt_pct(dxy_mom)}</div>
+        </div>
+        <div class="card">
+          <div class="c-lbl">🏦 미 10년물 금리</div>
+          <div class="c-val">{f"{us10y[0]:.2f}%" if us10y and us10y[0] else '지연'}</div>
+          <div class="c-sub2">전일 대비: {f"{us10y[0]-us10y[1]:+.2f}%p" if us10y and us10y[0] and us10y[1] else "-"}</div>
         </div>
         <div class="card">
           <div class="c-lbl">⚠️ 하이일드 스프레드</div>
@@ -608,7 +629,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
 
       <div class="footer">
         {sys_status_msg}<br>
-        Generated by Quantum AI Engine v10.1
+        Generated by Quantum AI Engine v10.2
       </div>
     </div>
     
@@ -619,18 +640,17 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
         with sync_playwright() as p:
             browser = p.chromium.launch()
             
-            # 🔥 핵심 마법 1: 넓이를 540으로 넓히고, 세로를 1300으로 넉넉하게 잡음
-            # 🔥 핵심 마법 2: device_scale_factor=2.5 를 주어서 이미지를 2.5배 뻥튀기 (초고화질 Retina 해상도 적용)
+            # 🔥 높이를 1400px으로 더 넉넉하게 늘려서 8구역 데이터가 짤리지 않게 방어
             page = browser.new_page(
-                viewport={"width": 540, "height": 1300},
+                viewport={"width": 540, "height": 1400},
                 device_scale_factor=2.5 
             )
             
             page.set_content(html_content)
             
-            # 폰트가 완전히 뜰 때까지 안전하게 대기
+            # 에러 났던 await 뺀 버전 유지!
             page.wait_for_load_state('networkidle') 
-            page.evaluate("document.fonts.ready")  # <--- await 삭제!
+            page.evaluate("document.fonts.ready") 
             page.wait_for_timeout(1000)
             
             path = "/tmp/quantum_full_dashboard.png"
