@@ -651,7 +651,7 @@ def generate_card_image(total_score, stage_label, ai, weight, diff_str, date_str
             # 🔥 Device Scale Factor는 극한의 고화질을 위해 3.5로 상향!
             page = browser.new_page(
                 viewport={"width": 720, "height": 2200}, 
-                device_scale_factor=3.5
+                device_scale_factor=2.0
             )
             
             page.set_content(html_content)
