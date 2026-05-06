@@ -107,14 +107,34 @@ def load_state():
         return json.loads(res.json()['files']['bot_state.json']['content'])
     except: return {}
 
-def save_state(score, stage, fg_score=None):
+def save_state(score, stage, fg_score=None, vix=None, fg_raw=None, spy_pct=None):
     try:
+        # 기존 상태 불러오기
+        existing = load_state()
+        history = existing.get("history", [])
+
+        # 오늘 데이터 추가
+        today = datetime.now().strftime('%Y-%m-%d')
+        # 오늘 날짜 중복 방지
+        history = [h for h in history if h.get("date") != today]
+        history.append({
+            "date": today,
+            "score": round(score, 1),
+            "stage": stage,
+            "vix": round(vix, 1) if vix else None,
+            "fg": fg_raw,
+            "spy_pct": round(spy_pct, 2) if spy_pct else None,
+        })
+        # 90일치만 유지
+        history = history[-90:]
+
         url = f"https://api.github.com/gists/{ENV['GIST_ID']}"
         headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}", "Accept": "application/vnd.github.v3+json"}
         payload = {
             "score": score,
             "stage": stage,
             "updated": datetime.now().isoformat(),
+            "history": history,
         }
         if fg_score is not None:
             payload["fg_score"] = fg_score
@@ -291,6 +311,8 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 [분석 원칙 - 매우 중요]
 1. [매크로 최우선] 뉴스 중 '🚨[핵심 매크로]' 연준, 금리 데이터에 집중하여 시장의 흐름(Risk-On/Off) 진단.
 2. [상관관계] 전달받은 데이터 수치를 맹신하고 증시에 미치는 영향을 'macro_correlation'에 통찰력 있게 작성.
+2-1. [추세 반영] '위험점수_추이' 데이터를 참고하여 현재 국면이
+     개선/악화/횡보 중 어느 방향인지 'macro_correlation'에 반드시 언급.
 3. [대응 전략] 비율(%) 숫자 금지. 투자자의 심리적 템포와 마음가짐 중심으로 'strategy' 작성.
 4. [미래 전략산업] 매크로 환경이 우주/로봇/양자에 우호적인지 'opportunity'에 1~2문장 진단.
 5. [거장 시그널 분리] 워런 버핏, 드러켄밀러 등 거장의 발언이 있다면 'guru_score'(-0.5~+0.5) 부여 및 'guru_insight' 요약. 없으면 0.0. 일반 리스크는 'macro_score'(-1.5~1.5) 부여.
@@ -416,6 +438,42 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom,
 
     return max(0.0, min(SCORE_MAX, s))
 
+def calc_trend(history):
+    if not history or len(history) < 2:
+        return None
+
+    scores = [h["score"] for h in history if "score" in h]
+    if not scores:
+        return None
+
+    def avg(lst): return round(sum(lst) / len(lst), 1) if lst else None
+
+    avg7  = avg(scores[-7:])
+    avg30 = avg(scores[-30:])
+    avg90 = avg(scores[-90:])
+
+    # 추세 판단
+    if avg7 and avg30 and avg7 < avg30:
+        trend = "📉 개선 중"
+    elif avg7 and avg30 and avg7 > avg30 + 1.5:
+        trend = "📈 악화 중"
+    else:
+        trend = "➖ 횡보"
+
+    max_score = max(scores[-90:]) if len(scores) >= 1 else None
+    min_score = min(scores[-90:]) if len(scores) >= 1 else None
+
+    # 최고/최저 날짜
+    max_date = next((h["date"] for h in reversed(history) if h.get("score") == max_score), "-")
+    min_date = next((h["date"] for h in reversed(history) if h.get("score") == min_score), "-")
+
+    return {
+        "avg7": avg7, "avg30": avg30, "avg90": avg90,
+        "trend": trend,
+        "max_score": max_score, "max_date": max_date,
+        "min_score": min_score, "min_date": min_date,
+    }
+
 # ==========================================
 # 🚀 메인 실행부
 # ==========================================
@@ -510,6 +568,21 @@ def main():
 
     vix_eval = "위험" if vix > VIX["danger"] else ("주의" if vix > VIX["warn"] else "안정")
 
+    # ── 추이 계산 ──
+    history = state.get("history", [])
+    trend = calc_trend(history)
+
+    trend_section = ""
+    if trend:
+        trend_section = f"""
+━━━━━━━━━━━━━━━━━━
+📊 위험 점수 추이 (90일)
+ ├ 7일 평균 : {trend['avg7']}
+ ├ 30일 평균: {trend['avg30']}
+ └ 90일 평균: {trend['avg90']}  {trend['trend']}
+⚡ 90일 최고: {trend['max_score']}  ({trend['max_date']})
+⚡ 90일 최저: {trend['min_score']}  ({trend['min_date']})"""
+    
     market_summary = {
         "SP500":      {"현재": spy_raw[0], "전일대비%": round(pct(spy_raw[0], spy_raw[1]), 2), "200일선대비%": round(gap(spy_raw[0], spy_raw[2]), 2), "고점대비%": round(spy_dd, 1) if spy_dd else None},
         "NASDAQ":     {"현재": qqq_raw[0], "전일대비%": round(pct(qqq_raw[0], qqq_raw[1]), 2)},
@@ -522,6 +595,16 @@ def main():
         "공포탐욕":   fg_score,
         "금현재가":   f"{gold[0]:.0f} ({get_gold_signal(gold)})" if gold else None,
         "RSI_SP500":  rsi,
+
+        # ✅ 이것만 추가
+        "위험점수_추이": {
+            "7일평균": trend["avg7"] if trend else None,
+            "30일평균": trend["avg30"] if trend else None,
+            "90일평균": trend["avg90"] if trend else None,
+            "추세": trend["trend"] if trend else None,
+            "90일최고": trend["max_score"] if trend else None,
+            "90일최저": trend["min_score"] if trend else None,
+        }
     }
 
     def _clean(v):
@@ -645,6 +728,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
 💡 매크로 지표 심층 분석 (AI)
 {ai['macro_correlation']}
 
+{trend_section}
 🛠 시스템: {sys_status_msg}
 """
 
@@ -665,7 +749,9 @@ RSI(S&P) : {get_rsi_label(rsi)}
         else:
             log("❌ 텔레그램 메시지 전송 최종 실패")
 
-    save_state(total_score, stage_label, fg_score)
+    save_state(total_score, stage_label, fg_score, 
+           vix=vix, fg_raw=fg_score, 
+           spy_pct=pct(spy_raw[0], spy_raw[1]))
     log(f"✅ 완료 | 점수={total_score:.1f} | 국면={stage_label}")
 
 if __name__ == "__main__":
