@@ -499,7 +499,7 @@ def calc_trend(history):
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 v9.2 가동 시작")
+    log("📊 퀀텀 v9.3 가동 시작")
     api_errors = []
 
     spy_raw = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
@@ -564,7 +564,7 @@ def main():
             feed = feedparser.parse(feed_url)
             count = 0
             for entry in feed.entries:
-                title = getattr(entry, "title", "").strip()  # ✅ [수정] getattr 방어
+                title = getattr(entry, "title", "").strip()
                 if title and title not in seen_titles:
                     seen_titles.add(title)
                     all_entries.append(entry)
@@ -616,8 +616,6 @@ def main():
         "공포탐욕":   fg_score,
         "금현재가":   f"{gold[0]:.0f} ({get_gold_signal(gold)})" if gold else None,
         "RSI_SP500":  rsi,
-
-        # ✅ 이것만 추가
         "위험점수_추이": {
             "7일평균": trend["avg7"] if trend else None,
             "30일평균": trend["avg30"] if trend else None,
@@ -669,19 +667,32 @@ def main():
     is_panic = vix >= VIX["panic"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= -4.0)
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
+    # ✅ v9.3 가중치 차등 매도 지침 및 배당 멘탈 방어 추가
     if is_panic:
-        stage_label, weight, stage_action = "💀 패닉 구간", 0, "기존 자산 100% 현금화 대피 (현금 방어 유지 + 극단 구간에서만 분할 접근)"
+        stage_label, weight = "💀 패닉 구간", 0
+        sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
+        stage_action = "기존 자산 현금화 대피 (배당 파이프라인 절반 유지)"
         total_score = SCORE_MAX
     elif total_score < 3:  
-        stage_label, weight, stage_action = "🟢 공격적 매수", 100, "주식 비중 100% 유지 및 수익 극대화"
+        stage_label, weight = "🟢 공격적 매수", 100
+        sell_idx, sell_div = "0%", "0%"
+        stage_action = "주식 비중 100% 유지 및 추가 매수(수량 확보)"
     elif total_score < 7:  
-        stage_label, weight, stage_action = "🔵 적극적 유지", 80,  "1차 수익 실현 및 방어 (자산 20% 현금화)"
+        stage_label, weight = "🔵 적극적 유지", 80
+        sell_idx, sell_div = "20%", "10%"
+        stage_action = "1차 수익 실현 및 방어 (배당 파이프라인 유지)"
     elif total_score < 11: 
-        stage_label, weight, stage_action = "🟡 부분 방어",   60,  "2차 추가 수익 실현 (자산 40% 현금화)"
+        stage_label, weight = "🟡 부분 방어",   60
+        sell_idx, sell_div = "25%", "15%"
+        stage_action = "2차 수익 실현 (하락장 대응 실탄 충전)"
     elif total_score < 13:
-        stage_label, weight, stage_action = "🟠 적극적 축소", 30,  "보수적 운영 (자산 70% 현금화)"
+        stage_label, weight = "🟠 적극적 축소", 30
+        sell_idx, sell_div = "50%", "25%"
+        stage_action = "보수적 운영 및 자산 비중 대폭 축소"
     else:                  
-        stage_label, weight, stage_action = "🔴 위험 회피",   0,   "대피 및 폭풍우 관망 (100% 현금화)"
+        stage_label, weight = "🔴 위험 회피",   0
+        sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
+        stage_action = "대피 및 폭풍우 관망 (배당으로 멘탈 방어)"
 
     prev_stage = state.get("stage", stage_label)
     prev_score = state.get("score", total_score)
@@ -699,7 +710,8 @@ def main():
     sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
-    msg = f"""🤖 퀀텀 인사이트 v9.2  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}
+    # 💡 2. 메시지 순서 재배치 (점수 밑에 추이 삽입, 매크로는 맨 아래로)
+    msg = f"""🤖 퀀텀 인사이트 v9.3  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}
 ━━━━━━━━━━━━━━━━━━
 {stage_change_alert}📌 시장 국면
 {ai['market_phase']}{bullish_suffix}
@@ -712,18 +724,21 @@ def main():
 💡 기회 요인 (미래 산업 진단)
 {ai['opportunity']}
 
-🧙‍♂️ 거장 시그널 (Guru Insight)
+🧙‍♂️ 거장 시그널
 {ai['guru_insight']}
 
 🧭 대응 전략
 {ai['strategy']}
 {extreme_fear_alert}
 ━━━━━━━━━━━━━━━━━━
-📊 위험 점수: {total_score:.1f} / 15.0 ({diff_str})
-🎯 주식 권장: {weight}%  |  현금: {100-weight}%
+📊 위험 점수: {total_score:.1f} / 15.0 ({diff_str}){trend_section}
+🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%
+📢 매도 지침 (현재 수량 기준):
+ ├ 📈 지수/성장(QQQ, SPY): 【 {sell_idx} 】
+ └ 💰 배당/인컴(SCHD, JEPI): 【 {sell_div} 】
+
 🚦 국면: {stage_label}
 📋 행동: {stage_action}
-
 ━━━━━━━━━━━━━━━━━━
 📈 주요 지표
 
@@ -741,15 +756,13 @@ RSI(S&P) : {get_rsi_label(rsi)}
 😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score is not None else "지연"}
 📊 VIX      : {vix:.2f}  {"🚨" if vix > VIX["danger"] else ("⚠️" if vix > VIX["warn"] else "✅")}
 💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
-🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}  {f"({us10y[0]-us10y[1]:+.2f}%p)" if us10y and us10y[0] and us10y[1] else ""}
+🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}
 📉 HY스프레드: {hy_eval}
 🥇 금        : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
-
 ━━━━━━━━━━━━━━━━━━
 💡 매크로 지표 심층 분석 (AI)
 {ai['macro_correlation']}
-
-{trend_section}
+━━━━━━━━━━━━━━━━━━
 🛠 시스템: {sys_status_msg}
 """
 
