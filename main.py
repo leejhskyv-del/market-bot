@@ -1,4 +1,8 @@
 import requests, os, json, feedparser, re, time, logging, sys, html
+import time
+os.environ['TZ'] = 'Asia/Seoul'
+time.tzset() # 리눅스 기반 서버(Github Actions 등)에서 작동
+
 from datetime import datetime, timedelta
 from openai import OpenAI
 
