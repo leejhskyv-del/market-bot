@@ -434,7 +434,7 @@ def calc_trend(history):
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v9.8 가동 시작")
+    log("📊 퀀텀 하이브리드 v9.9 가동 시작")
     
     state = load_state()
     prev_score = state.get("score", 0.0)
@@ -597,7 +597,7 @@ def main():
     hy_eval = f"{hy_spread[0]:.2f}% ({'위험' if hy_spread[0] > HY_SPREAD_DANGER else '주의' if hy_spread[0] > HY_SPREAD_WARN else '안정'})" if hy_spread[0] else "지연"
     extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n" if is_extreme_fear else ""
 
-    msg_header = f"🤖 퀀텀 인사이트 v9.8  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v9.9  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
         msg_header += f"\n\n✅ [업데이트 완료] 텔레그램 명령으로 ISM 지수가 {current_ism}로 갱신되었습니다!"
     elif days_since_update > 35:
@@ -691,7 +691,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M")
     }, existing_history=history, spy_current=spy_raw[0], spy_pct=pct(spy_raw[0], spy_raw[1]), spy_dd=spy_dd, vix=vix, fg_score=fg_score, dxy=dxy, hy_spread=hy_spread[0] if hy_spread else None, us10y=us10y[0] if us10y else None, fx=fx_data[0])
     
-    log(f"✅ v9.8 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
+    log(f"✅ v9.9 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
 
 if __name__ == "__main__":
     main()
