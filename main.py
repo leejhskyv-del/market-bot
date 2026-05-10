@@ -16,12 +16,12 @@ UNRATE_THRESHOLD = 4.2
 VIX              = {"warn": 25, "danger": 35, "panic": 45}
 FX_GAP           = {"caution": 4, "danger": 8}
 DXY              = {"warn": 122, "danger": 126}
-SPY_DAILY_DROP   = -2.5
+SPY_PANIC_DROP   = -4.0         # 클라우드 피드백 반영: 변수명 직관화 (패닉을 유발하는 서킷브레이커 기준점)
 SPY_TREND_GAP    = 3.0
 SCORE_MAX        = 15.0
 HY_SPREAD_WARN   = 4.5
 HY_SPREAD_DANGER = 6.5
-FG_EXTREME_FEAR  = 10
+FG_EXTREME_FEAR  = 20
 DXY_MOM_WARN     = 3.0
 DRAWDOWN_WARN    = -10.0
 DRAWDOWN_DANGER  = -20.0
@@ -103,7 +103,7 @@ def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
     return None
 
 # ==========================================
-# 💾 상태 관리 (히스토리 복구 완료)
+# 💾 상태 관리
 # ==========================================
 def load_state():
     try:
@@ -115,11 +115,10 @@ def load_state():
     except: 
         return {"score": 0.0, "ism_pmi": 50.0, "ism_date": "2024-01-01", "last_update_id": 0, "history": []}
 
-def save_state(score, stage, raw_score, current_ism, ism_date, last_update_id, fg_score=None, vix=None, spy_pct=None, spy_dd=None, dxy=None, hy_spread=None, us10y=None, fx=None, spy_current=None):
+def save_state(state_data, existing_history, spy_current=None, spy_pct=None, spy_dd=None, vix=None, fg_score=None, dxy=None, hy_spread=None, us10y=None, fx=None):
     try:
-        existing = load_state()
-        history = existing.get("history", [])
         today = datetime.now().strftime('%Y-%m-%d')
+        history = existing_history[:] 
 
         if spy_current and spy_current > 0:
             for h in history:
@@ -136,8 +135,8 @@ def save_state(score, stage, raw_score, current_ism, ism_date, last_update_id, f
         history = [h for h in history if h.get("date") != today]
         history.append({
             "date":        today,
-            "score":       round(raw_score, 1),
-            "stage":       stage,
+            "score":       round(state_data.get("score", 0), 1),
+            "stage":       state_data.get("stage", ""),
             "vix":         round(vix, 1) if vix else None,
             "fg":          fg_score,
             "spy_pct":     round(spy_pct, 2) if spy_pct is not None else None,
@@ -147,26 +146,21 @@ def save_state(score, stage, raw_score, current_ism, ism_date, last_update_id, f
             "us10y":       round(us10y, 2) if us10y else None,
             "fx":          round(fx, 0) if fx else None,
             "spy_current": round(spy_current, 2) if spy_current else None,
-            "spy_1w":  None, "spy_1m":  None, "spy_3m":  None,
         })
         history = history[-90:]
-
+        
+        state_data["history"] = history
+        
         url = f"https://api.github.com/gists/{ENV['GIST_ID']}"
-        headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}", "Accept": "application/vnd.github.v3+json"}
-        payload = {
-            "score": raw_score, "stage": stage,
-            "ism_pmi": current_ism, "ism_date": ism_date, "last_update_id": last_update_id,
-            "updated": datetime.now().isoformat(),
-            "history": history,
-        }
-        if fg_score is not None: payload["fg_score"] = fg_score
-        data = {"files": {"bot_state.json": {"content": json.dumps(payload, ensure_ascii=False)}}}
-        requests.patch(url, headers=headers, json=data, timeout=10).raise_for_status()
-        log("✅ 상태 저장 완료 (백테스트 데이터 포함)")
-    except Exception as e: log(f"상태 저장 실패: {e}")
+        headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}"}
+        payload = {"files": {"bot_state.json": {"content": json.dumps(state_data, ensure_ascii=False)}}}
+        requests.patch(url, headers=headers, json=payload, timeout=10)
+        log("✅ 상태 저장 완료")
+    except Exception as e:
+        log(f"⚠️ 상태 저장 실패: {e}")
 
 # ==========================================
-# 📊 데이터 수집 (KOSPI, GOLD, RSI 복구 완료)
+# 📊 데이터 수집
 # ==========================================
 def get_fred_series(series_id, days=1000, min_count=1):
     url = "https://api.stlouisfed.org/fred/series/observations"
@@ -225,7 +219,7 @@ def calc_rsi_wilder(values, period=14):
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1) if avg_loss != 0 else 100.0
 
 # ==========================================
-# 😨 Fear & Greed (CNN 전용 복구)
+# 😨 Fear & Greed 
 # ==========================================
 def get_fear_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -296,7 +290,7 @@ def get_macro_regime(ism, unrate):
         return {"emoji": "🔴", "name": "경기 침체 우려 (Recession)", "score_adj": +2.5, "action": "혹한기 진입 가능성. 폭락 위험 극대화 (대피 우선)"}
 
 # ==========================================
-# 🧠 AI 분석 (v9.3 원본 복구 완료)
+# 🧠 AI 분석
 # ==========================================
 def extract_news_keywords(entries, max_items=8):
     critical, normal = [], []
@@ -339,18 +333,15 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
     return data
 
 # ==========================================
-# 🎯 위험 점수 산출 (v9.3 로직 전면 복구)
+# 🎯 위험 점수 산출
 # ==========================================
 def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_score, us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering, regime_adj):
     s = 0.0
-    is_bull_market = False
-    if (spy[0] > 0 and qqq[0] > 0 and spy[2] > 0 and qqq[2] > 0):
-        is_bull_market = (spy[0] > spy[2] and qqq[0] > qqq[2] and vix < 20)
         
     if spy[0] > 0:
         if gap(spy[0], spy[2]) < -SPY_TREND_GAP: s += 2.0
         elif gap(spy[0], spy[2]) < 0: s += 1.0
-        if pct(spy[0], spy[1]) <= -4.0: s += 3.0
+        if pct(spy[0], spy[1]) <= SPY_PANIC_DROP: s += 3.0
 
     if qqq[0] > 0:
         if gap(qqq[0], qqq[2]) < -SPY_TREND_GAP: s += 1.5
@@ -408,6 +399,8 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
     if is_recovering:
         s -= 1.6
         log("✨ V자 회복 모멘텀 감지: 위험점수 -1.6 적용")
+        
+    is_bull_market = (spy[0] > 0 and qqq[0] > 0 and spy[2] > 0 and qqq[2] > 0 and spy[0] > spy[2] and qqq[0] > qqq[2] and vix < 20)
     if is_bull_market:
         s -= 1.0
         log("🔥 강세장 필터 가동: 리스크 점수 완화 (-1.0)")
@@ -432,16 +425,17 @@ def calc_trend(history):
     return {"avg7": avg7, "avg30": avg30, "avg90": avg90, "trend": trend, "max_score": max_score, "max_date": max_date, "min_score": min_score, "min_date": min_date}
 
 # ==========================================
-# 🚀 메인 실행부 (완전 통합본 v9.6)
+# 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v9.6 가동 시작 (초완전판)")
+    log("📊 퀀텀 하이브리드 v9.8 가동 시작")
     
     state = load_state()
     prev_score = state.get("score", 0.0)
     current_ism = state.get("ism_pmi", 50.0)
     ism_date = state.get("ism_date", "2024-01-01")
     last_update_id = state.get("last_update_id", 0)
+    history = state.get("history", [])
 
     new_ism = None
     try:
@@ -506,7 +500,6 @@ def main():
     rsi = calc_rsi_wilder(spy_closes) if spy_closes else None
     spy_dd = ((spy_raw[0] - spy_raw[3]) / spy_raw[3] * 100) if spy_raw[0] and spy_raw[3] else None
 
-    # V자 반등 감지 로직 복구
     is_recovering = False
     if (spy_closes and len(spy_closes) >= 6 and vix_closes and len(vix_closes) >= 10):
         try:
@@ -517,19 +510,11 @@ def main():
         except: pass
 
     regime_info = get_macro_regime(current_ism, unrate)
-    history = state.get("history", [])
     trend = calc_trend(history)
 
     trend_section = ""
     if trend:
-        trend_section = f"""
-━━━━━━━━━━━━━━━━━━
-📊 위험 점수 추이 (90일)
- ├ 7일 평균 : {trend['avg7']}
- ├ 30일 평균: {trend['avg30']}
- └ 90일 평균: {trend['avg90']}  {trend['trend']}
-⚡ 90일 최고: {trend['max_score']}  ({trend['max_date']})
-⚡ 90일 최저: {trend['min_score']}  ({trend['min_date']})"""
+        trend_section = f"""\n━━━━━━━━━━━━━━━━━━\n📊 위험 점수 추이 (90일)\n ├ 7일 평균 : {trend['avg7']}\n ├ 30일 평균: {trend['avg30']}\n └ 90일 평균: {trend['avg90']}  {trend['trend']}\n⚡ 90일 최고: {trend['max_score']}  ({trend['max_date']})\n⚡ 90일 최저: {trend['min_score']}  ({trend['min_date']})"""
 
     all_entries, seen_titles = [], set()
     for source_name, feed_url in NEWS_FEEDS:
@@ -553,7 +538,7 @@ def main():
     ai = get_ai_analysis(news_context, market_summary) if news_context != "뉴스 수집 실패" else {"score":0.5, "market_phase":"지연", "opportunity": "-", "guru_insight": "없음", "top_risks":["-","-","-"], "strategy":"대기", "macro_correlation":"-"}
 
     total_score = calc_risk_score(spy_raw, qqq_raw, kospi_raw, fx_data, vix, vix_trend, dxy, dxy_mom, ai["score"], us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering, regime_info["score_adj"])
-    is_panic = vix >= VIX["panic"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= -4.0)
+    is_panic = vix >= VIX["panic"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= SPY_PANIC_DROP)
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
 
     raw_score = total_score
@@ -585,10 +570,28 @@ def main():
         sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
         stage_action = "대피 및 폭풍우 관망 (배당으로 멘탈 방어)"
 
+    bullish_suffix = "  🔥 강세장" if spy_raw[0] > 0 and gap(spy_raw[0], spy_raw[2]) > 3 and qqq_raw[0] > 0 and gap(qqq_raw[0], qqq_raw[2]) > 3 else ""
+    
+    # 💵 환율 상태 판단 (순수 1년/2년 평균 이격도 기반)
+    fx_2y_gap = gap(fx_data[0], fx_data[3])
+    fx_1y_gap = gap(fx_data[0], fx_data[2])
+
+    if fx_2y_gap > FX_GAP["danger"]:
+        fx_status = "🚨 역사적 고점권"
+    elif fx_2y_gap > FX_GAP["caution"]:
+        fx_status = "⚠️ 2년 평균 상회 (주의)"
+    elif fx_1y_gap > FX_GAP["caution"]:
+        fx_status = "🟠 1년 평균 상회"
+    else:
+        fx_status = "✅ 정상 범위"
+        
+    vix_eval_str = "🚨" if vix > VIX["danger"] else ("⚠️" if vix > VIX["warn"] else "✅")
+    dxy_status = "✅" if dxy < DXY["warn"] else "⚠️" if dxy < DXY["danger"] else "🚨"
+    dxy_mom_str = f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom and dxy_mom > DXY_MOM_WARN else ''}" if dxy_mom else ""
     hy_eval = f"{hy_spread[0]:.2f}% ({'위험' if hy_spread[0] > HY_SPREAD_DANGER else '주의' if hy_spread[0] > HY_SPREAD_WARN else '안정'})" if hy_spread[0] else "지연"
     extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n" if is_extreme_fear else ""
 
-    msg_header = f"🤖 퀀텀 인사이트 v9.6  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v9.8  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
         msg_header += f"\n\n✅ [업데이트 완료] 텔레그램 명령으로 ISM 지수가 {current_ism}로 갱신되었습니다!"
     elif days_since_update > 35:
@@ -604,8 +607,8 @@ def main():
  ├ 현재 국면  : {regime_info['emoji']} {regime_info['name']}
  └ 시스템 보정: {regime_info['action']} (위험점수 {regime_info['score_adj']:+.1f}점 조절)
 ━━━━━━━━━━━━━━━━━━
-📌 시장 국면 (AI 진단)
-{ai['market_phase']}
+📌 시장 국면
+{ai['market_phase']}{bullish_suffix}
 
 ⚠️ 핵심 리스크
 ① {ai['top_risks'][0]}
@@ -621,31 +624,32 @@ def main():
 🧭 대응 전략
 {ai['strategy']}
 {extreme_fear_alert}━━━━━━━━━━━━━━━━━━
-📊 최종 위험 점수: {total_score:.1f} / 15.0 ({diff_str}){trend_section}
+📊 위험 점수: {total_score:.1f} / 15.0 ({diff_str}){trend_section}
 🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%
-
 📢 매도 지침 (현재 수량 기준):
- ├ 📈 지수/성장(TQQQ, QQQ): 【 {sell_idx} 】
+ ├ 📈 지수/성장(QQQ, SPY): 【 {sell_idx} 】
  └ 💰 배당/인컴(SCHD, JEPI): 【 {sell_div} 】
 
 🚦 국면: {stage_label}
 📋 행동: {stage_action}
 ━━━━━━━━━━━━━━━━━━
-📈 주요 지표 요약
+📈 주요 지표
 
 S&P 500  : {format_index(*spy_raw)}
- └ 고점 대비: {get_drawdown_label(spy_dd)}
+ └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
 NASDAQ   : {format_index(*qqq_raw)}
 KOSPI    : {format_index(*kospi_raw)}
 RSI(S&P) : {get_rsi_label(rsi)}
 
 💵 환율 (USD/KRW)
-{fx_data[0]:,.0f}원 (1년 평균 대비: {gap(fx_data[0], fx_data[2]):+.1f}%)
+{fx_data[0]:,.0f}원  {fx_status}
+ ├ 1년 평균: {fx_data[2]:,.0f}원  ({gap(fx_data[0], fx_data[2]):+.1f}%)
+ └ 2년 평균: {fx_data[3]:,.0f}원  ({fx_2y_gap:+.1f}%)
 
 😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score is not None else "지연"}
-📊 VIX 지수  : {vix:.2f}
-💲 달러인덱스: {dxy:.1f}
-🏦 미10Y금리 : {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}
+📊 VIX      : {vix:.2f}  {vix_eval_str}
+💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
+🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}
 📉 HY스프레드: {hy_eval}
 🥇 금        : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
 ━━━━━━━━━━━━━━━━━━
@@ -671,8 +675,17 @@ RSI(S&P) : {get_rsi_label(rsi)}
         else:
             log("❌ 텔레그램 메시지 전송 최종 실패")
 
-    save_state(raw_score, stage_label, raw_score, current_ism, ism_date, last_update_id, fg_score, vix=vix, spy_pct=pct(spy_raw[0], spy_raw[1]), spy_dd=spy_dd, dxy=dxy, hy_spread=hy_spread[0] if hy_spread and hy_spread[0] else None, us10y=us10y[0] if us10y and us10y[0] else None, fx=fx_data[0], spy_current=spy_raw[0])
-    log(f"✅ v9.6 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
+    save_state({
+        "score": raw_score,
+        "stage": stage_label,
+        "ism_pmi": current_ism,
+        "ism_date": ism_date,
+        "last_update_id": last_update_id,
+        "fg_score": fg_score,
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }, existing_history=history, spy_current=spy_raw[0], spy_pct=pct(spy_raw[0], spy_raw[1]), spy_dd=spy_dd, vix=vix, fg_score=fg_score, dxy=dxy, hy_spread=hy_spread[0] if hy_spread else None, us10y=us10y[0] if us10y else None, fx=fx_data[0])
+    
+    log(f"✅ v9.8 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
 
 if __name__ == "__main__":
     main()
