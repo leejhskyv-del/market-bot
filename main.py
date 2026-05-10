@@ -12,7 +12,7 @@ from openai import OpenAI
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 def log(msg): logging.info(msg)
 
-UNRATE_THRESHOLD = 4.2          # 실업률 위험 기준선 (클라우드 피드백 반영)
+UNRATE_THRESHOLD = 4.2          # 실업률 위험 기준선
 VIX              = {"warn": 25, "danger": 35, "panic": 45}
 FX_GAP           = {"caution": 4, "danger": 8}
 DXY              = {"warn": 122, "danger": 126}
@@ -76,7 +76,6 @@ def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
     log(f"❌ [{label}] 최종 실패")
     return None
 
-# 🌟 클라우드 피드백 반영: 완벽한 상태 관리 (Gist)
 def load_state():
     try:
         url = f"https://api.github.com/gists/{ENV['GIST_ID']}"
@@ -94,7 +93,7 @@ def save_state(state_data):
         headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}"}
         payload = {"files": {"bot_state.json": {"content": json.dumps(state_data, ensure_ascii=False)}}}
         requests.patch(url, headers=headers, json=payload, timeout=10)
-        log("✅ 상태 저장 완료 (Gist 업데이트)")
+        log("✅ 상태 저장 완료")
     except Exception as e:
         log(f"⚠️ 상태 저장 실패: {e}")
 
@@ -122,12 +121,13 @@ def get_unrate():
     v = get_fred_series("UNRATE", days=365, min_count=1)
     return v[-1] if v else 4.0
 
-def get_yahoo_closes(ticker, range_="2y"):
+# ✅ 버그 수정: min_count 파라미터를 추가하여 1달(1mo) 검색 시 50개 미만 에러가 나지 않도록 수정
+def get_yahoo_closes(ticker, range_="2y", min_count=20):
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}"
     res = requests.get(url, headers=YAHOO_HEADERS, timeout=12)
     res.raise_for_status()
     closes = [v for v in res.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"] if v is not None]
-    if len(closes) < 50: raise ValueError(f"데이터 부족")
+    if len(closes) < min_count: raise ValueError(f"데이터 부족")
     return closes
 
 def get_yahoo_stats(ticker, range_="2y"):
@@ -140,7 +140,7 @@ def get_fx_data():
     return closes[-1], closes[-2], sum(closes[-min(len(closes), 252):]) / min(len(closes), 252), sum(closes[-min(len(closes), 504):]) / min(len(closes), 504), None
 
 # ==========================================
-# 🧭 매크로 국면 판독 (v9.4 이모지 분리 반영)
+# 🧭 매크로 국면 판독
 # ==========================================
 def get_macro_regime(ism, unrate):
     if ism >= 50.0 and unrate <= UNRATE_THRESHOLD:
@@ -216,16 +216,15 @@ def calc_risk_score(spy, qqq, fx_data, vix, dxy, ai_score, us10y, hy_spread, spy
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v9.5 가동 시작 (텔레그램 명령 지원)")
+    log("📊 퀀텀 하이브리드 v9.5.2 가동 시작")
     
-    # 1. 이전 상태 및 ISM 데이터 로드
     state = load_state()
     prev_score = state.get("score", 0.0)
     current_ism = state.get("ism_pmi", 50.0)
     ism_date = state.get("ism_date", "2024-01-01")
     last_update_id = state.get("last_update_id", 0)
 
-    # 🌟 2. 텔레그램 메일함 확인 (주인의 ISM 업데이트 명령 읽기)
+    # 텔레그램 명령 스캔
     new_ism = None
     try:
         url = f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/getUpdates?offset={last_update_id + 1}"
@@ -236,7 +235,6 @@ def main():
                 if update_id > last_update_id: 
                     last_update_id = update_id
                 
-                # 메시지 텍스트 파싱 (예: "ISM 49.5")
                 msg_text = item.get("message", {}).get("text", "").upper()
                 if msg_text.startswith("ISM "):
                     try:
@@ -245,32 +243,47 @@ def main():
     except Exception as e:
         log(f"텔레그램 명령 확인 실패: {e}")
 
-    # 주인이 새로운 ISM을 보냈다면 변수 덮어쓰기!
     if new_ism is not None:
         current_ism = new_ism
         ism_date = datetime.now().strftime("%Y-%m-%d")
-        log(f"📩 텔레그램 명령 수신: ISM 지수 {current_ism} 업데이트 완료")
+        log(f"📩 텔레그램 명령 수신: ISM {current_ism}")
 
-    # 3. 데이터 유통기한 체크
     days_since_update = 0
     try:
         days_since_update = (datetime.now() - datetime.strptime(ism_date, "%Y-%m-%d")).days
     except: pass
 
-    # 4. 시장 데이터 수집
-    spy_raw = safe(lambda: get_yahoo_stats("^GSPC"), "SPY") or (0,0,0,0)
-    qqq_raw = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ") or (0,0,0,0)
-    fx_data = safe(lambda: get_fx_data(), "FX") or (1400.0, 1400.0, 1400.0, 1400.0, None)
-    us10y   = safe(lambda: get_us10y(), "10Y") or (None, None)
-    hy_spread = safe(lambda: get_hy_spread(), "HY") or (None, None)
-    unrate  = safe(lambda: get_unrate(), "실업률") or 4.0
+    # ✅ 시스템 에러 추적기 부활
+    api_errors = []
 
-    vix_closes = safe(lambda: get_yahoo_closes("^VIX", "1mo"), "VIX")
+    spy_raw = safe(lambda: get_yahoo_stats("^GSPC"), "SPY")
+    if not spy_raw: spy_raw = (0,0,0,0); api_errors.append("SPY")
+
+    qqq_raw = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")
+    if not qqq_raw: qqq_raw = (0,0,0,0); api_errors.append("QQQ")
+
+    fx_data = safe(lambda: get_fx_data(), "FX")
+    if not fx_data: fx_data = (1400.0, 1400.0, 1400.0, 1400.0, None); api_errors.append("FX")
+
+    us10y   = safe(lambda: get_us10y(), "10Y")
+    if not us10y: us10y = (None, None); api_errors.append("10Y")
+
+    hy_spread = safe(lambda: get_hy_spread(), "HY")
+    if not hy_spread: hy_spread = (None, None); api_errors.append("HY스프레드")
+
+    unrate  = safe(lambda: get_unrate(), "실업률")
+    if not unrate: unrate = 4.0; api_errors.append("실업률")
+
+    # ✅ 버그 수정: min_count=10 전달
+    vix_closes = safe(lambda: get_yahoo_closes("^VIX", "1mo", min_count=10), "VIX")
     vix = vix_closes[-1] if vix_closes else 22.0
-    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "1mo"), "DXY")
-    dxy = dxy_closes[-1] if dxy_closes else 118.0
-    spy_dd = ((spy_raw[0] - spy_raw[3]) / spy_raw[3] * 100) if spy_raw[0] and spy_raw[3] else None
+    if not vix_closes: api_errors.append("VIX")
 
+    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "1mo", min_count=10), "DXY")
+    dxy = dxy_closes[-1] if dxy_closes else 118.0
+    if not dxy_closes: api_errors.append("DXY")
+
+    spy_dd = ((spy_raw[0] - spy_raw[3]) / spy_raw[3] * 100) if spy_raw[0] and spy_raw[3] else None
     regime_info = get_macro_regime(current_ism, unrate)
 
     all_entries, seen_titles = [], set()
@@ -296,7 +309,6 @@ def main():
     total_score = calc_risk_score(spy_raw, qqq_raw, fx_data, vix, dxy, ai["score"], us10y, hy_spread, spy_dd, regime_info["score_adj"])
     is_panic = vix >= VIX["panic"] or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= -4.0)
 
-    # ✅ [수정된 부분] 패닉 덮어쓰기 전 원본 점수(raw_score)를 따로 보관합니다.
     raw_score = total_score
     diff_str = f"{(raw_score - prev_score):+.1f}"
 
@@ -328,14 +340,16 @@ def main():
 
     hy_eval = f"{hy_spread[0]:.2f}%" if hy_spread[0] else "지연"
 
-    # 5. 헤더 알림 조합 (새로 갱신되었거나, 경고가 필요하거나)
-    msg_header = f"🤖 퀀텀 인사이트 v9.5.1  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v9.5.2  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
-        msg_header += f"\n\n✅ [업데이트 완료] 주인의 텔레그램 명령으로 ISM 지수가 {current_ism}로 갱신되었습니다!"
+        msg_header += f"\n\n✅ [업데이트 완료] 텔레그램 명령으로 ISM 지수가 {current_ism}로 갱신되었습니다!"
     elif days_since_update > 35:
         msg_header += f"\n\n🚨🚨 [경고] ISM 지수가 너무 오래되었습니다! (마지막 갱신: {days_since_update}일 전)\n채팅창에 'ISM 50.2' 형식으로 최신 수치를 보내주세요! 🚨🚨"
 
-    # 메시지 작성
+    # ✅ 시스템 상태 로직 부활
+    sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
+    if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
+
     msg = f"""{msg_header}
 ━━━━━━━━━━━━━━━━━━
 🌍 거시 경제 국면 (매크로 내비게이션)
@@ -379,17 +393,27 @@ NASDAQ   : {format_index(*qqq_raw)}
 ━━━━━━━━━━━━━━━━━━
 💡 매크로 지표 심층 분석 (AI)
 {ai['macro_correlation']}
+━━━━━━━━━━━━━━━━━━
+🛠 시스템: {sys_status_msg}
 """
 
     def split_message(text, max_len=3900):
         return [text[i:i+max_len] for i in range(0, len(text), max_len)]
 
     for chunk in split_message(msg):
-        safe(lambda: requests.post(
-            f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
-            data={"chat_id": ENV["CHAT_ID"], "text": chunk}, timeout=15).raise_for_status(), "텔레그램 전송", retry=3)
+        for _ in range(3):
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
+                    data={"chat_id": ENV["CHAT_ID"], "text": chunk},
+                    timeout=15
+                ).raise_for_status()
+                break # 성공 시 반복문 즉시 탈출
+            except Exception as e:
+                time.sleep(2) # 실패 시 2초 대기 후 재시도
+        else:
+            log("❌ 텔레그램 메시지 전송 최종 실패")
 
-    # 🌟 6. 상태 최종 저장 (✅ [수정된 부분] total_score 대신 raw_score를 저장합니다)
     save_state({
         "score": raw_score,
         "ism_pmi": current_ism,
@@ -397,7 +421,7 @@ NASDAQ   : {format_index(*qqq_raw)}
         "last_update_id": last_update_id,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M")
     })
-    log(f"✅ v9.5.1 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f} (적용={total_score:.1f})")
+    log(f"✅ v9.5.2 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
 
 if __name__ == "__main__":
     main()
