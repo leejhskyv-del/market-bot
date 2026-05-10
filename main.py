@@ -255,9 +255,15 @@ def format_index(c, p, sma, _=None):
 
 def get_drawdown_label(dd):
     if dd is None: return "산출 불가"
+    
+    # 52주 고점을 넘어서거나 같은 경우 (신고가)
+    if dd >= 0: return "🔥 신고점 갱신"
+    
+    # 기존 하락 구간 라벨
     if dd <= DRAWDOWN_DANGER: return f"{dd:.1f}%  💀 대형 조정"
     if dd <= DRAWDOWN_WARN: return f"{dd:.1f}%  🔴 조정 구간"
     if dd <= -5: return f"{dd:.1f}%  🟠 소폭 하락"
+    
     return f"{dd:.1f}%  🟢 고점 근접"
 
 def get_rsi_label(rsi):
