@@ -560,18 +560,22 @@ def main():
         sell_idx, sell_div = "0%", "0%"
         stage_action = "주식 비중 100% 유지 및 추가 매수(수량 확보)"
     elif total_score < 7:  
+        # 1차 매도: 20% (잔파도 방어)
         stage_label, weight = "🔵 적극적 유지", 80
         sell_idx, sell_div = "20%", "10%"
-        stage_action = "1차 수익 실현 및 방어 (배당 파이프라인 유지)"
+        stage_action = "1차 수익 실현 (잔파도 무시, 20%만 현금화)"
     elif total_score < 11: 
-        stage_label, weight = "🟡 부분 방어",   60
-        sell_idx, sell_div = "25%", "15%"
-        stage_action = "2차 수익 실현 (하락장 대응 실탄 충전)"
+        # 2차 매도: 추가 30% (누적 50% 매도) - 본격적인 방어
+        stage_label, weight = "🟡 부분 방어",   50
+        sell_idx, sell_div = "50%", "20%"
+        stage_action = "2차 수익 실현 (본격 하락 대비, 누적 50% 현금화)"
     elif total_score < 13:
-        stage_label, weight = "🟠 적극적 축소", 30
-        sell_idx, sell_div = "50%", "25%"
-        stage_action = "보수적 운영 및 자산 비중 대폭 축소"
+        # 3차 매도: 추가 30% (누적 80% 매도) - 강력한 위험 회피
+        stage_label, weight = "🟠 적극적 축소", 20
+        sell_idx, sell_div = "80%", "30%"
+        stage_action = "3차 수익 실현 (위기 직전, 누적 80% 현금화)"
     else:                  
+        # 4차 매도: 남은 20% (누적 100% 전량 매도) - 대피
         stage_label, weight = "🔴 위험 회피",   0
         sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
         stage_action = "대피 및 폭풍우 관망 (배당으로 멘탈 방어)"
