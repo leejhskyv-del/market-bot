@@ -608,7 +608,10 @@ def main():
     decision_score = raw_score
     whipsaw_alert = ""
 
-    if not is_panic and raw_score < 13.0:
+    # 클라우드 조언 반영: 실제 기록된 점수가 최소 7개 이상일 때만 작동
+    scores_available = len([h for h in history if "score" in h])
+
+    if not is_panic and raw_score < 13.0 and scores_available >= 7:
         boundaries = [3.0, 7.0, 11.0]
         buffer = 0.5
         
@@ -623,6 +626,9 @@ def main():
                     decision_score = b + 0.1
                     whipsaw_alert = f"\n\n🛡️ [휩소 방어] 일시적 점수 하락({raw_score:.1f})이나, 7일 추세({avg7:.1f}) 위험 잔존으로 방어 태세를 유지합니다."
                     log(f"🛡️ 휩소 방어: 점수 {raw_score} -> {decision_score} 보정 (avg7: {avg7})")
+                
+                # 클라우드 조언 반영: 조건에 걸려 보정되었다면 즉시 루프 탈출
+                break
     # --------------------------------------------------
 
     if is_panic:
