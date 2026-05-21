@@ -219,7 +219,6 @@ def calc_rsi_wilder(values, period=14):
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
     return round(100 - 100 / (1 + avg_gain / avg_loss), 1) if avg_loss != 0 else 100.0
 
-# 3번 수정 반영: 1mo 데이터 에러 방어용 min_count=10 추가
 def get_market_breadth():
     try:
         spy_c = get_yahoo_closes("^GSPC", "1mo", min_count=10)
@@ -231,7 +230,6 @@ def get_market_breadth():
         return "✅ 정상" if diff < 2.0 else "⚠️ 시장 왜곡 (소수 종목 편중)"
     except: return "산출 불가"
 
-# 1번 수정 반영: 부호(+/-) 파이썬 내장 포맷팅(:+.1f) 사용
 def get_best_hedge():
     tickers = {"GLD": "금", "TLT": "국채", "UUP": "달러"}
     res = {}
@@ -434,7 +432,6 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
         s -= 1.0
         log("🔥 강세장 필터 가동: 리스크 점수 완화 (-1.0)")
 
-    # ▼ [v10.2 핵심 로직] return 전에 올바르게 배치 완료 ▼
     if breadth_status == "⚠️ 시장 왜곡 (소수 종목 편중)":
         s += 0.8
         log("⚠️ 시장 왜곡 감지: 위험점수 +0.8 가산")
@@ -442,14 +439,12 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
     if recent_score_jump:
         s += 0.5
         log("⚡ 점수 급등 모멘텀 감지: 위험점수 +0.5 가산")
-    # ▲ 여기까지 ▲
 
     s += (ai_score * AI_WEIGHT)
     s += regime_adj 
     
-    # 여기서 최종적으로 한 번만 딱 내보냅니다!
     return max(0.0, min(SCORE_MAX, s))
-    
+
 def calc_trend(history):
     if not history or len(history) < 2: return None
     scores = [h["score"] for h in history if "score" in h]
@@ -469,7 +464,7 @@ def calc_trend(history):
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v10.2 가동 시작")
+    log("📊 퀀텀 하이브리드 v10.3 가동 시작")
     
     state = load_state()
     prev_score = state.get("score", 0.0)
@@ -502,7 +497,6 @@ def main():
 
     api_errors = []
 
-    # 5번 수정 반영: SPY 이중 호출 제거 (성능 최적화)
     spy_closes = safe(lambda: get_yahoo_closes("^GSPC", "2y"), "SPY")
     if spy_closes:
         count = min(len(spy_closes), 200)
@@ -599,7 +593,6 @@ def main():
 
     total_score = calc_risk_score(spy_raw, qqq_raw, kospi_raw, fx_data, vix, vix_trend, dxy, dxy_mom, ai["score"], us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering, regime_info["score_adj"], is_bull, breadth_status, recent_score_jump)
     
-    # 4번 수정 반영: API 절약 & 설계 불일치 해결 (13점 이상일 때만 호출)
     best_hedge_display = get_best_hedge() if total_score >= 13 else "안전 (위험 13점 이상 시 자동 산출)"
 
     is_panic = ((vix is not None and vix >= VIX["panic"]) or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= SPY_PANIC_DROP))
@@ -608,24 +601,47 @@ def main():
     raw_score = total_score
     diff_str = f"{(raw_score - prev_score):+.1f}"
 
+    # --------------------------------------------------
+    # ▼ [v10.3 핵심] 히스테리시스 + 추세 융합 엔진 ▼
+    # --------------------------------------------------
+    avg7 = trend["avg7"] if trend and trend["avg7"] is not None else raw_score
+    decision_score = raw_score
+    whipsaw_alert = ""
+
+    if not is_panic and raw_score < 13.0:
+        boundaries = [3.0, 7.0, 11.0]
+        buffer = 0.5
+        
+        for b in boundaries:
+            if b - buffer <= raw_score <= b + buffer:
+                if raw_score >= b and avg7 < b:
+                    decision_score = b - 0.1 
+                    whipsaw_alert = f"\n\n🛡️ [휩소 방어] 일시적 점수 상승({raw_score:.1f})이나, 7일 추세({avg7:.1f}) 안정으로 매도 지침을 유보합니다."
+                    log(f"🛡️ 휩소 방어: 점수 {raw_score} -> {decision_score} 보정 (avg7: {avg7})")
+                
+                elif raw_score < b and avg7 >= b:
+                    decision_score = b + 0.1
+                    whipsaw_alert = f"\n\n🛡️ [휩소 방어] 일시적 점수 하락({raw_score:.1f})이나, 7일 추세({avg7:.1f}) 위험 잔존으로 방어 태세를 유지합니다."
+                    log(f"🛡️ 휩소 방어: 점수 {raw_score} -> {decision_score} 보정 (avg7: {avg7})")
+    # --------------------------------------------------
+
     if is_panic:
         stage_label, weight = "💀 패닉 구간", 0
         sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
         stage_action = "기존 자산 현금화 대피 (배당 파이프라인 절반 유지)"
-        total_score = SCORE_MAX
-    elif total_score < 3:  
+    elif decision_score < 3:  
         stage_label, weight = "🟢 공격적 매수", 100
         sell_idx, sell_div = "0%", "0%"
         stage_action = "주식 비중 100% 유지 및 추가 매수(수량 확보)"
-    elif total_score < 7:  
+    elif decision_score < 7:  
         stage_label, weight = "🔵 적극적 유지", 80
         sell_idx, sell_div = "20%", "10%"
         stage_action = "1차 수익 실현 (잔파도 무시, 20%만 현금화)"
-    elif total_score < 11: 
+    elif decision_score < 11: 
         stage_label, weight = "🟡 부분 방어",   50
         sell_idx, sell_div = "50%", "20%"
         stage_action = "2차 수익 실현 (본격 하락 대비, 누적 50% 현금화)"
-    elif total_score < 13:
+    elif decision_score < 13:
         stage_label, weight = "🟠 적극적 축소", 20
         sell_idx, sell_div = "80%", "30%"
         stage_action = "3차 수익 실현 (위기 직전, 누적 80% 현금화)"
@@ -639,13 +655,15 @@ def main():
     special_alert = ""
     if is_panic:
         special_alert = "\n\n🚨 ⚡ [블랙스완 감지] 일일 -4% 이상 폭락 (서킷브레이커)!\n▶ 시장에 돌발 패닉이 발생했습니다. 묻지도 따지지도 말고 즉시 100% 대피하십시오."
-    elif total_score >= 13:
+    elif decision_score >= 13:
         special_alert = "\n\n🚨 💀 [긴급 대피 시그널] 매크로 경제 붕괴(퍼펙트 스톰) 확정!\n▶ 거시 경제 지표가 최악을 가리키고 있습니다. 모든 자산을 현금화하고 관망하십시오."
     elif is_recovering:
         special_alert = "\n\n🚀 🚨 [특별 시그널] V자 폭발적 반등 포착!\n▶ 하락장 종료 확정! 대피해둔 100%의 현금을 TQQQ에 집중 투입할 절호의 타이밍입니다."
-    elif total_score == 0 and spy_dd is not None and spy_dd >= 0:
+    elif decision_score == 0 and spy_dd is not None and spy_dd >= 0:
         special_alert = "\n\n🌈 ✨ [골디락스 시그널] 완벽한 대세 상승장 진입!\n▶ 리스크 제로 구간입니다. 신고가를 경신 중이니 TQQQ의 복리 폭발력을 편안하게 누리십시오."
     
+    special_alert += whipsaw_alert
+
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_1y_gap = gap(fx_data[0], fx_data[2])
 
@@ -664,7 +682,7 @@ def main():
     hy_eval = f"{hy_spread[0]:.2f}% ({'위험' if hy_spread[0] > HY_SPREAD_DANGER else '주의' if hy_spread[0] > HY_SPREAD_WARN else '안정'})" if hy_spread[0] else "지연"
     extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n" if is_extreme_fear else ""
 
-    msg_header = f"🤖 퀀텀 인사이트 v10.2  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v10.3  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
         msg_header += f"\n\n✅ [업데이트 완료] 텔레그램 명령으로 ISM 지수가 {current_ism}로 갱신되었습니다!"
     elif days_since_update > 35:
@@ -701,7 +719,7 @@ def main():
  ├ 시장 폭(Breadth): {breadth_status}
  └ 위기 시 최적 대피처: {best_hedge_display}
 ━━━━━━━━━━━━━━━━━━
-📊 위험 점수: {total_score:.1f} / 15.0 ({diff_str}){trend_section}
+📊 위험 점수: {raw_score:.1f} / 15.0 ({diff_str}){trend_section}
 🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%
 📢 매도 지침 (현재 수량 기준):
  ├ 📈 지수/성장(QQQ, SPY): 【 {sell_idx} 】
@@ -761,7 +779,6 @@ RSI(S&P) : {get_rsi_label(rsi)}
         else:
             log("❌ 텔레그램 메시지 전송 최종 실패")
 
-    # 2번 수정 반영: daily_log 날짜 중복 저장 완벽 방어 (dedup)
     today_str = datetime.now().strftime('%Y-%m-%d')
     daily_log = [e for e in state.get("daily_log", []) if e.get("date") != today_str]
     daily_log.append({"date": today_str, "score": round(raw_score, 1), "phase": stage_label})
@@ -789,7 +806,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
                us10y=us10y[0] if us10y else None, 
                fx=fx_data[0])
     
-    log(f"✅ v10.2 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
+    log(f"✅ v10.3 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
 
 if __name__ == "__main__":
     main()
