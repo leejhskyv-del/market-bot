@@ -473,43 +473,46 @@ def calc_LEV_unified(decision_score, ism, vix, spy_closes, vix_closes,
 
 
 def format_LEV_section(LEV):
-    """텔레그램용 LEV 섹션 — 핵심 신호 중심으로 간결하게"""
+    """텔레그램용 LEV 섹션 — 위성 비중 텍스트 삭제 버전"""
     w = LEV["weight"]
     phase = LEV["phase"]
-    
-    # 신호에 따른 이모지 및 핵심 액션
+
+    # 1. 매수 신호 메시지 결정 (이 부분은 유지)
     if phase in ("A", "차단") or w == 0.0:
-        signal_header = "🔴 [매수 중단]"
-        action = "이번 주는 관망하며 현금을 유지하세요."
+        if phase == "A" or LEV["phase_name"] in ("🔴 위기차단", "🔴 ISM차단"):
+            buy_signal = "🔴 [매수 완전 중단]"
+            buy_action = "LEV 자동매수 일시 정지 요망"
+        else:
+            buy_signal = "⚪ [이번 주 매수 보류]"
+            buy_action = f"조건 미충족 → {LEV['reason']}"
     elif phase == "B":
-        signal_header = "🚀 [집중 매수!]"
-        action = "바닥 신호 발동! 가용 예산을 투입하세요."
+        buy_signal = "🚀 [즉시 집중 매수!]"
+        buy_action = "바닥 신호 발동 → 예산 전부 투입 권장"
     else:
         if w >= 10.0:
-            signal_header = "🔵 [적극 매수]"
-            action = "골디락스 구간, 평소의 2배 투입."
+            buy_signal = "🔵 [적극 매수]"
+            buy_action = "골디락스 구간, 평소의 2배 투입."
         elif w >= 5.0:
-            signal_header = "🟢 [정상 매수]"
-            action = "계획된 매수를 진행하세요."
+            buy_signal = "🟢 [정상 매수]"
+            buy_action = "양호한 환경, 계획대로 진행."
         else:
-            signal_header = "🟡 [매수 축소]"
-            action = "조건이 약합니다. 매수를 줄이거나 보류하세요."
+            buy_signal = "🟡 [매수 축소]"
+            buy_action = "조건이 약함, 비중을 줄이세요."
 
-    # 바닥 감지 정보가 있을 때만 출력 (없으면 숨김)
+    # 2. 하단 상세 정보 구성 (w 변수를 사용하지 않음)
     bottom_str = ""
-    if LEV["bottom_detail"] != "-" and phase == "B":
+    if LEV["bottom_detail"] != "-":
         bottom_str = f"\n🎯 바닥 감지: {LEV['bottom_detail']}"
 
     return f"""
 ━━━━━━━━━━━━━━━━━━
 🚀 레버리지 전략 [v10.5]
 
-{signal_header}
-📋 {action}
+{buy_signal}
+📋 {buy_action}
 
- ├ 위성 비중 : {w:.1f}%
- └ 시장 국면 : {LEV['phase_name']} {bottom_str}
-"""
+ └ 국면: {LEV['phase_name']}{bottom_str}
+ """
 
 # ==========================================
 # 🧠 AI 분석
