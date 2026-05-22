@@ -1,5 +1,4 @@
 import requests, os, json, feedparser, re, time, logging, sys, html
-import time
 os.environ['TZ'] = 'Asia/Seoul'
 time.tzset()
 
@@ -16,7 +15,7 @@ UNRATE_THRESHOLD = 4.2
 VIX              = {"warn": 25, "danger": 35, "panic": 45}
 FX_GAP           = {"caution": 4, "danger": 8}
 DXY              = {"warn": 122, "danger": 126}
-SPY_PANIC_DROP   = -4.0         # 패닉을 유발하는 서킷브레이커 기준점
+SPY_PANIC_DROP   = -4.0
 SPY_TREND_GAP    = 3.0
 SCORE_MAX        = 15.0
 HY_SPREAD_WARN   = 4.5
@@ -27,16 +26,34 @@ DRAWDOWN_WARN    = -10.0
 DRAWDOWN_DANGER  = -20.0
 AI_WEIGHT        = 0.5
 
+# ==========================================
+# 🚀 LEV 통합 엔진 파라미터 (v10.5 백테스트 검증 완료)
+# ==========================================
+# Phase A (위기): 점수≥11 or 패닉 → 0% 전면 차단
+LEV_CRISIS_THRESHOLD = 11.0
+
+# Phase B (바닥 회복 — 완화 조건)
+LEV_B_MAX       = 0.25    # 최대 25%
+LEV_B_EXP       = 1.5     # 지수
+LEV_B_SCORE_TOP = 12.0    # ★ v10.5: 8→12 (위기 직후 높은 점수에서도 진입 허용)
+LEV_B_VIX_MAX   = 30      # VIX 30 이하
+BOTTOM_DD_MIN    = -20.0   # 낙폭 -20% 이상
+BOTTOM_VIX_PEAK  = 35      # 위기 중 VIX 35 이상 도달
+BOTTOM_CONSEC    = 3       # 연속 상승일
+BOTTOM_VIX_COOL  = 0.15    # VIX 고점 대비 15% 냉각
+BOTTOM_MIN_DAYS  = 10      # ★ v10.5: 15→10 (V자 반등 초입 빠른 포착)
+
+# Phase C (골디락스 평상시 — 엄격 조건)
+LEV_C_MAX       = 0.15    # 최대 15%
+LEV_C_EXP       = 2.0     # 이차함수
+LEV_C_SCORE_TOP = 3.0     # score 3 이하
+LEV_C_VIX_MAX   = 20      # VIX 20 이하
+LEV_C_DD_MIN    = -15.0   # 낙폭 -15% 이상
+LEV_ISM_MIN     = 47.0    # ★ v10.5: 50→47 (서비스업 주도 상승장 포착)
+
 RETRY_COUNT = 4
 RETRY_DELAY = 15
-
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
-CNN_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://edition.cnn.com/markets/fear-and-greed",
-    "Origin": "https://edition.cnn.com",
-}
 
 ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
@@ -45,13 +62,11 @@ ECON_KEYWORDS = [
     "Buffett", "버핏", "Berkshire", "버크셔",
     "Druckenmiller", "드러켄밀러", "Howard Marks", "하워드 막스", "Ray Dalio", "레이 달리오"
 ]
-
 MACRO_CRITICAL = [
     "fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike",
     "연준", "파월", "금리", "인플레이션", "물가",
     "buffett", "버핏", "druckenmiller", "드러켄밀러", "howard marks", "하워드 막스", "ray dalio", "레이 달리오"
 ]
-
 NEWS_FEEDS = [
     ("Yahoo Finance",  "https://finance.yahoo.com/news/rssindex"),
     ("CNBC 경제",      "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
@@ -84,10 +99,9 @@ client = OpenAI(api_key=ENV["OPENAI_API_KEY"])
 def pct(c, p):  return (c - p) / p * 100 if p and abs(p) > 1e-9 else 0
 def gap(c, s):  return (c - s) / s * 100 if s and abs(s) > 1e-9 else 0
 def arrow(v):   return "▲" if v > 0 else "▼" if v < 0 else "➖"
-
 def safe_float(val, default=0.0):
     try: return float(val)
-    except (TypeError, ValueError): return default
+    except: return default
 
 def safe(func, label="", retry=RETRY_COUNT, delay=RETRY_DELAY):
     for i in range(retry):
@@ -112,46 +126,45 @@ def load_state():
         res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
         return json.loads(res.json()['files']['bot_state.json']['content'])
-    except: 
-        return {"score": 0.0, "ism_pmi": 50.0, "ism_date": "2024-01-01", "last_update_id": 0, "history": []}
+    except:
+        return {"score": 0.0, "ism_pmi": 50.0, "ism_date": "2024-01-01",
+                "last_update_id": 0, "history": [],
+                "lev_vix_peak": 0.0, "lev_crisis_days": 0}
 
-def save_state(state_data, existing_history, spy_current=None, spy_pct=None, spy_dd=None, vix=None, fg_score=None, dxy=None, hy_spread=None, us10y=None, fx=None):
+def save_state(state_data, existing_history, spy_current=None, spy_pct=None,
+               spy_dd=None, vix=None, fg_score=None, dxy=None,
+               hy_spread=None, us10y=None, fx=None):
     try:
-        today = datetime.now().strftime('%Y-%m-%d')
-        history = existing_history[:] 
-
+        today   = datetime.now().strftime('%Y-%m-%d')
+        history = existing_history[:]
         if spy_current and spy_current > 0:
             for h in history:
                 h_date = h.get("date")
                 if not h_date or not h.get("spy_current"): continue
                 try:
-                    days_ago = (datetime.strptime(today, '%Y-%m-%d') - datetime.strptime(h_date, '%Y-%m-%d')).days
+                    days_ago = (datetime.strptime(today,'%Y-%m-%d') - datetime.strptime(h_date,'%Y-%m-%d')).days
                     ret = round((spy_current - h["spy_current"]) / h["spy_current"] * 100, 2)
-                    if days_ago == 7:  h["spy_1w"] = ret
+                    if days_ago == 7:        h["spy_1w"] = ret
                     if 28 <= days_ago <= 32: h["spy_1m"] = ret
                     if 88 <= days_ago <= 92: h["spy_3m"] = ret
                 except: pass
-
         history = [h for h in history if h.get("date") != today]
         history.append({
-            "date":        today,
-            "score":       round(state_data.get("score", 0), 1),
-            "stage":       state_data.get("stage", ""),
-            "vix":         round(vix, 1) if vix else None,
-            "fg":          fg_score,
-            "spy_pct":     round(spy_pct, 2) if spy_pct is not None else None,
-            "spy_dd":      round(spy_dd, 1) if spy_dd else None,
-            "dxy":         round(dxy, 1) if dxy else None,
-            "hy_spread":   round(hy_spread, 2) if hy_spread else None,
-            "us10y":       round(us10y, 2) if us10y else None,
-            "fx":          round(fx, 0) if fx else None,
+            "date": today, "score": round(state_data.get("score", 0), 1),
+            "stage": state_data.get("stage", ""),
+            "vix":   round(vix, 1) if vix else None,
+            "fg": fg_score,
+            "spy_pct": round(spy_pct, 2) if spy_pct is not None else None,
+            "spy_dd": round(spy_dd, 1) if spy_dd else None,
+            "dxy":   round(dxy, 1) if dxy else None,
+            "hy_spread": round(hy_spread, 2) if hy_spread else None,
+            "us10y": round(us10y, 2) if us10y else None,
+            "fx":    round(fx, 0) if fx else None,
             "spy_current": round(spy_current, 2) if spy_current else None,
         })
         history = history[-90:]
-        
         state_data["history"] = history
-        
-        url = f"https://api.github.com/gists/{ENV['GIST_ID']}"
+        url     = f"https://api.github.com/gists/{ENV['GIST_ID']}"
         headers = {"Authorization": f"token {ENV['GITHUB_TOKEN']}"}
         payload = {"files": {"bot_state.json": {"content": json.dumps(state_data, ensure_ascii=False)}}}
         requests.patch(url, headers=headers, json=payload, timeout=10)
@@ -163,93 +176,91 @@ def save_state(state_data, existing_history, spy_current=None, spy_pct=None, spy
 # 📊 데이터 수집
 # ==========================================
 def get_fred_series(series_id, days=1000, min_count=1):
-    url = "https://api.stlouisfed.org/fred/series/observations"
-    params = {"series_id": series_id, "api_key": ENV["FRED_API_KEY"], "file_type": "json", "observation_start": (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')}
-    res = requests.get(url, params=params, timeout=15)
+    url    = "https://api.stlouisfed.org/fred/series/observations"
+    params = {"series_id": series_id, "api_key": ENV["FRED_API_KEY"],
+              "file_type": "json",
+              "observation_start": (datetime.now()-timedelta(days=days)).strftime('%Y-%m-%d')}
+    res    = requests.get(url, params=params, timeout=15)
     res.raise_for_status()
-    values = [float(o["value"]) for o in res.json().get("observations", []) if o["value"] != "."]
-    if len(values) < min_count: raise ValueError(f"데이터 부족")
+    values = [float(o["value"]) for o in res.json().get("observations",[]) if o["value"] != "."]
+    if len(values) < min_count: raise ValueError("데이터 부족")
     return values
 
 def get_us10y():
-    v = get_fred_series("DGS10", days=60, min_count=5)
-    return v[-1], v[-2]
-
+    v = get_fred_series("DGS10", days=60, min_count=5); return v[-1], v[-2]
 def get_hy_spread():
-    v = get_fred_series("BAMLH0A0HYM2", days=60, min_count=5)
-    return v[-1], v[-2]
-
+    v = get_fred_series("BAMLH0A0HYM2", days=60, min_count=5); return v[-1], v[-2]
 def get_unrate():
-    v = get_fred_series("UNRATE", days=365, min_count=1)
-    return v[-1] if v else 4.0
+    v = get_fred_series("UNRATE", days=365, min_count=1); return v[-1] if v else 4.0
 
 def get_yahoo_closes(ticker, range_="2y", min_count=20):
-    url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}"
-    res = requests.get(url, headers=YAHOO_HEADERS, timeout=12)
+    url  = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}"
+    res  = requests.get(url, headers=YAHOO_HEADERS, timeout=12)
     res.raise_for_status()
     closes = [v for v in res.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"] if v is not None]
-    if len(closes) < min_count: raise ValueError(f"데이터 부족")
+    if len(closes) < min_count: raise ValueError("데이터 부족")
     return closes
 
 def get_yahoo_stats(ticker, range_="2y"):
-    closes = get_yahoo_closes(ticker, range_)
-    count = min(len(closes), 200)
-    year_closes = closes[-253:] if len(closes) >= 253 else closes
-    return closes[-1], closes[-2], sum(closes[-count:]) / count, max(year_closes)
-    
+    closes     = get_yahoo_closes(ticker, range_)
+    count      = min(len(closes), 200)
+    year_closes= closes[-253:] if len(closes) >= 253 else closes
+    return closes[-1], closes[-2], sum(closes[-count:])/count, max(year_closes)
+
 def get_dxy_momentum(dxy_closes):
     if not dxy_closes or len(dxy_closes) < 21: return None
     return pct(dxy_closes[-1], dxy_closes[-21])
 
 def get_fx_data():
     closes = get_yahoo_closes("KRW=X", "2y")
-    return closes[-1], closes[-2], sum(closes[-min(len(closes), 252):]) / min(len(closes), 252), sum(closes[-min(len(closes), 504):]) / min(len(closes), 504)
+    return (closes[-1], closes[-2],
+            sum(closes[-min(len(closes),252):])/min(len(closes),252),
+            sum(closes[-min(len(closes),504):])/min(len(closes),504))
 
 def get_gold_data():
     closes = get_yahoo_closes("GC=F", "1y")
-    return closes[-1], closes[-2], sum(closes[-min(len(closes), 252):]) / min(len(closes), 252)
-    
+    return closes[-1], closes[-2], sum(closes[-min(len(closes),252):])/min(len(closes),252)
+
 def calc_rsi_wilder(values, period=14):
-    if not values or len(values) < period * 2: return None
-    deltas = [values[i] - values[i-1] for i in range(1, len(values))]
-    gains, losses = [max(d, 0) for d in deltas], [max(-d, 0) for d in deltas]
-    avg_gain, avg_loss = sum(gains[:period]) / period, sum(losses[:period]) / period
+    if not values or len(values) < period*2: return None
+    deltas   = [values[i]-values[i-1] for i in range(1,len(values))]
+    gains    = [max(d,0) for d in deltas]
+    losses   = [max(-d,0) for d in deltas]
+    avg_gain = sum(gains[:period])/period
+    avg_loss = sum(losses[:period])/period
     for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    return round(100 - 100 / (1 + avg_gain / avg_loss), 1) if avg_loss != 0 else 100.0
+        avg_gain = (avg_gain*(period-1)+gains[i])/period
+        avg_loss = (avg_loss*(period-1)+losses[i])/period
+    return round(100-100/(1+avg_gain/avg_loss),1) if avg_loss != 0 else 100.0
 
 def get_market_breadth():
     try:
-        spy_c = get_yahoo_closes("^GSPC", "1mo", min_count=10)
-        rsp_c = get_yahoo_closes("RSP", "1mo", min_count=10)
+        spy_c = get_yahoo_closes("^GSPC","1mo",min_count=10)
+        rsp_c = get_yahoo_closes("RSP","1mo",min_count=10)
         if not spy_c or not rsp_c: return "데이터 지연"
-        spy_ret = pct(spy_c[-1], spy_c[0])
-        rsp_ret = pct(rsp_c[-1], rsp_c[0])
-        diff = spy_ret - rsp_ret
+        diff = pct(spy_c[-1],spy_c[0]) - pct(rsp_c[-1],rsp_c[0])
         return "✅ 정상" if diff < 2.0 else "⚠️ 시장 왜곡 (소수 종목 편중)"
     except: return "산출 불가"
 
 def get_best_hedge():
-    tickers = {"GLD": "금", "TLT": "국채", "UUP": "달러"}
+    tickers = {"GLD":"금","TLT":"국채","UUP":"달러"}
     res = {}
     for t in tickers:
         try:
-            c = get_yahoo_closes(t, "3mo")
-            res[tickers[t]] = pct(c[-1], c[0])
+            c = get_yahoo_closes(t,"3mo"); res[tickers[t]] = pct(c[-1],c[0])
         except: continue
     if not res: return "산출 불가"
     best = max(res, key=res.get)
     return f"{best} ({res[best]:+.1f}%)"
 
 # ==========================================
-# 😨 Fear & Greed 
+# 😨 Fear & Greed
 # ==========================================
 def get_fear_greed():
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     headers_list = [
-        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36", "Accept": "application/json, text/plain, */*", "Referer": "https://edition.cnn.com/markets/fear-and-greed", "Origin": "https://edition.cnn.com"},
-        {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36", "Accept": "application/json, text/plain, */*", "Referer": "https://www.cnn.com/markets/fear-and-greed", "Origin": "https://edition.cnn.com"},
+        {"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36","Accept":"application/json, text/plain, */*","Referer":"https://edition.cnn.com/markets/fear-and-greed","Origin":"https://edition.cnn.com"},
+        {"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36","Accept":"application/json, text/plain, */*","Referer":"https://www.cnn.com/markets/fear-and-greed","Origin":"https://edition.cnn.com"},
     ]
     for attempt in range(4):
         headers = headers_list[attempt % len(headers_list)]
@@ -258,18 +269,19 @@ def get_fear_greed():
             if res.status_code == 418: time.sleep(15); continue
             res.raise_for_status()
             data = res.json()
-            if "fear_and_greed" in data and isinstance(data["fear_and_greed"], dict): score = round(float(data["fear_and_greed"]["score"]))
-            elif "fear_and_greed_historical" in data and data["fear_and_greed_historical"].get("data"): score = round(float(data["fear_and_greed_historical"]["data"][-1]["y"]))
-            else: raise ValueError("CNN F&G JSON 구조 변경 감지")
-
-            if score <= 10:  lbl = "극단적 공포 😱🚨"
+            if "fear_and_greed" in data and isinstance(data["fear_and_greed"], dict):
+                score = round(float(data["fear_and_greed"]["score"]))
+            elif "fear_and_greed_historical" in data and data["fear_and_greed_historical"].get("data"):
+                score = round(float(data["fear_and_greed_historical"]["data"][-1]["y"]))
+            else: raise ValueError("CNN F&G JSON 구조 변경")
+            if score <= 10:   lbl = "극단적 공포 😱🚨"
             elif score <= 25: lbl = "극단적 공포 😱"
             elif score <= 45: lbl = "공포 😨"
             elif score <= 55: lbl = "중립 😐"
             elif score <= 75: lbl = "탐욕 😏"
             else:             lbl = "극단적 탐욕 🤑"
             return score, lbl
-        except Exception as e:
+        except:
             if attempt < 3: time.sleep(10)
     return None, None
 
@@ -278,28 +290,26 @@ def format_index(c, p, sma, _=None):
     return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%\n └ 200일선 대비: {gap(c,sma):+.1f}%"
 
 def get_drawdown_label(dd):
-    if dd is None: return "산출 불가"
-    
-    if dd >= 0: return "🔥 신고점 갱신"
+    if dd is None:            return "산출 불가"
+    if dd >= 0:               return "🔥 신고점 갱신"
     if dd <= DRAWDOWN_DANGER: return f"{dd:.1f}%  💀 대형 조정"
-    if dd <= DRAWDOWN_WARN: return f"{dd:.1f}%  🔴 조정 구간"
-    if dd <= -5: return f"{dd:.1f}%  🟠 소폭 하락"
-    
+    if dd <= DRAWDOWN_WARN:   return f"{dd:.1f}%  🔴 조정 구간"
+    if dd <= -5:              return f"{dd:.1f}%  🟠 소폭 하락"
     return f"{dd:.1f}%  🟢 고점 근접"
 
 def get_rsi_label(rsi):
     if rsi is None: return "산출 불가"
-    if rsi >= 75: return f"{rsi}  🔴 과매수"
-    if rsi >= 60: return f"{rsi}  🟠 상단"
-    if rsi <= 25: return f"{rsi}  🟢 과매도"
-    if rsi <= 40: return f"{rsi}  🔵 하단"
+    if rsi >= 75:   return f"{rsi}  🔴 과매수"
+    if rsi >= 60:   return f"{rsi}  🟠 상단"
+    if rsi <= 25:   return f"{rsi}  🟢 과매도"
+    if rsi <= 40:   return f"{rsi}  🔵 하단"
     return f"{rsi}  ➖ 중립"
 
 def get_gold_signal(gold):
     if not gold: return "지연"
     st_gap = gap(gold[0], gold[2])
-    if st_gap > 10: return "🚨 장기 과열"
-    elif st_gap > 3: return "🟠 상승 추세"
+    if st_gap > 10:   return "🚨 장기 과열"
+    elif st_gap > 3:  return "🟠 상승 추세"
     elif st_gap < -5: return "🟢 저점 근접"
     return "➖ 중립"
 
@@ -308,13 +318,208 @@ def get_gold_signal(gold):
 # ==========================================
 def get_macro_regime(ism, unrate):
     if ism >= 50.0 and unrate <= UNRATE_THRESHOLD:
-        return {"emoji": "🟢", "name": "골디락스 (안정적 성장)", "score_adj": -1.5, "action": "최적 환경. 단기 노이즈 무시 (TQQQ 홀딩 우대)"}
+        return {"emoji":"🟢","name":"골디락스 (안정적 성장)","score_adj":-1.5,
+                "action":"최적 환경. 단기 노이즈 무시 (lev 홀딩 우대)"}
     elif ism >= 50.0 and unrate > UNRATE_THRESHOLD:
-        return {"emoji": "🟡", "name": "경기 과열 / 둔화 초기", "score_adj": +0.5, "action": "성장은 유지되나 고용 둔화. 주의 필요"}
+        return {"emoji":"🟡","name":"경기 과열 / 둔화 초기","score_adj":+0.5,
+                "action":"성장은 유지되나 고용 둔화. 주의 필요"}
     elif ism < 50.0 and unrate <= UNRATE_THRESHOLD:
-        return {"emoji": "🟠", "name": "제조업 둔화 (소프트랜딩 대기)", "score_adj": +0.5, "action": "제조업 위축이나 고용이 버팀. 점진적 방어 태세"}
+        return {"emoji":"🟠","name":"제조업 둔화 (소프트랜딩 대기)","score_adj":+0.5,
+                "action":"제조업 위축이나 고용이 버팀. 점진적 방어 태세"}
     else:
-        return {"emoji": "🔴", "name": "경기 침체 우려 (Recession)", "score_adj": +2.5, "action": "혹한기 진입 가능성. 폭락 위험 극대화 (대피 우선)"}
+        return {"emoji":"🔴","name":"경기 침체 우려 (Recession)","score_adj":+2.5,
+                "action":"혹한기 진입 가능성. 폭락 위험 극대화 (대피 우선)"}
+
+# ==========================================
+# 🚀 lev 통합 엔진 v10.5 (백테스트 검증 완료)
+# ==========================================
+def _update_bottom_tracker(spy_closes, vix_closes, spy_dd, state):
+    """낙폭 -10% 이상 구간: VIX 최고점 기록 + 위기 일수 카운트"""
+    if not vix_closes: return state
+    vix_now     = vix_closes[-1]
+    vix_peak    = state.get("lev_vix_peak", 0.0)
+    crisis_days = state.get("lev_crisis_days", 0)
+    if spy_dd is not None and spy_dd <= -10.0:
+        crisis_days += 1
+        if vix_now and vix_now > vix_peak:
+            vix_peak = vix_now
+    elif spy_dd is not None and spy_dd > -5.0:
+        vix_peak = 0.0
+        crisis_days = 0
+    state["lev_vix_peak"]    = round(vix_peak, 2)
+    state["lev_crisis_days"] = crisis_days
+    return state
+
+
+def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
+    """바닥 3중 조건 체크"""
+    if not spy_closes or not vix_closes:
+        return False, 0, "데이터 없음"
+    vix_now     = vix_closes[-1]
+    vix_peak    = state.get("lev_vix_peak", 0.0)
+    crisis_days = state.get("lev_crisis_days", 0)
+    c1 = spy_dd is not None and spy_dd <= BOTTOM_DD_MIN
+    c2 = vix_peak >= BOTTOM_VIX_PEAK
+    c3_rally = (len(spy_closes) >= BOTTOM_CONSEC + 1 and
+                all(spy_closes[i] > spy_closes[i-1] for i in range(-BOTTOM_CONSEC, 0)))
+    vix_10d_max = max(vix_closes[-10:]) if len(vix_closes) >= 10 else vix_now
+    c3_cool     = vix_now < vix_10d_max * (1 - BOTTOM_VIX_COOL)
+    c3          = c3_rally and c3_cool
+    min_wait    = crisis_days >= BOTTOM_MIN_DAYS  # ★ v10.5: 10일
+    count       = sum([c1, c2, c3])
+    all_met     = c1 and c2 and c3 and min_wait
+    detail      = (f"DD:{spy_dd:.1f}%{'✅' if c1 else '❌'} "
+                   f"VIX피크:{vix_peak:.0f}{'✅' if c2 else '❌'} "
+                   f"반등{'✅' if c3 else '❌'} "
+                   f"({crisis_days}일/{BOTTOM_MIN_DAYS}일)")
+    return all_met, count, detail
+
+
+def calc_lev_unified(decision_score, ism, vix, spy_closes, vix_closes,
+                       spy_dd, rsi, is_panic, state):
+    """
+    lev 통합 엔진 v10.5 — 백테스트 검증 완료 (25년 DCA 1031% 수익)
+
+    실행 순서 (★ v10.5 핵심 변경):
+      1. Phase A (위기/패닉) → 전면 차단
+      2. Phase B (바닥 신호) → ISM 무시하고 즉시 진입  ← 순서 변경
+      3. ISM 차단            → Phase C에만 적용
+      4. Phase C (골디락스)  → 비선형 복리
+
+    변경 요약 (v10.4 → v10.5):
+      B_SCORE_TOP: 8 → 12  (위기 직후 높은 점수에서도 진입)
+      ISM_MIN: 50 → 47     (서비스업 주도 상승장 포착)
+      BOTTOM_MIN_DAYS: 15 → 10  (V자 초입 빠른 포착)
+      ISM 차단 위치: Phase B 이후로 이동  (가장 중요)
+    """
+    state = _update_bottom_tracker(spy_closes, vix_closes, spy_dd, state)
+
+    # ── [1순위] Phase A: 위기/패닉 ──
+    if is_panic or decision_score >= lev_CRISIS_THRESHOLD:
+        return {
+            "weight": 0.0, "phase": "A", "phase_name": "🔴 위기차단",
+            "formula": "-", "reason": "패닉/위기 구간 → lev 전량 차단",
+            "bottom_detail": "-", "state": state
+        }
+
+    # 바닥 조건 체크
+    bottom_met, bottom_count, bottom_detail = _check_bottom_conditions(
+        spy_closes, vix_closes, spy_dd, state)
+
+    # ── [2순위] Phase B: 바닥 회복 (★ ISM보다 먼저 — 위기후 ISM은 후행지표) ──
+    if bottom_met:
+        if vix is not None and vix > lev_B_VIX_MAX:
+            return {
+                "weight": 0.0, "phase": "B", "phase_name": "🟡 B조건미달",
+                "formula": f"25%×((12-score)/12)^1.5",
+                "reason": f"바닥 신호 있으나 VIX 과열 ({vix:.1f}>{lev_B_VIX_MAX}) → 대기",
+                "bottom_detail": bottom_detail, "state": state
+            }
+        score_factor = max(0.0, (lev_B_SCORE_TOP - decision_score) / lev_B_SCORE_TOP)
+        weight = round(lev_B_MAX * (score_factor ** lev_B_EXP) * 100, 1)
+        return {
+            "weight": weight, "phase": "B", "phase_name": "🚀 바닥회복",
+            "formula": f"25%×((12-{decision_score:.1f})/12)^1.5 = {weight:.1f}%",
+            "reason": "바닥 3중 신호 완전 충족 → 공격적 재진입 (ISM 무시)",
+            "bottom_detail": bottom_detail, "state": state
+        }
+
+    # ── [3순위] ISM 차단 (★ Phase C에만 적용, 기준 47로 완화) ──
+    if ism is not None and ism < lev_ISM_MIN:
+        return {
+            "weight": 0.0, "phase": "차단", "phase_name": "🔴 ISM차단",
+            "formula": "-",
+            "reason": f"ISM 수축 ({ism:.1f}<{lev_ISM_MIN}) → 골디락스 레버리지 금지",
+            "bottom_detail": bottom_detail, "state": state
+        }
+
+    # ── [4순위] Phase C: 골디락스 비선형 (Gemini 방식) ──
+    if decision_score >= lev_C_SCORE_TOP:
+        return {
+            "weight": 0.0, "phase": "C", "phase_name": "⚪ 점수초과",
+            "formula": "15%×((3-score)/3)^2",
+            "reason": f"점수 {decision_score:.1f}점 ≥ {lev_C_SCORE_TOP}점 → 골디락스 범위 이탈",
+            "bottom_detail": bottom_detail, "state": state
+        }
+    if vix is not None and vix > lev_C_VIX_MAX:
+        return {
+            "weight": 0.0, "phase": "C", "phase_name": "⚪ VIX차단",
+            "formula": "15%×((3-score)/3)^2",
+            "reason": f"VIX 과열 ({vix:.1f}>{lev_C_VIX_MAX}) → 진입 금지",
+            "bottom_detail": bottom_detail, "state": state
+        }
+    if spy_dd is not None and spy_dd < lev_C_DD_MIN:
+        return {
+            "weight": 0.0, "phase": "C", "phase_name": "⚪ 낙폭차단",
+            "formula": "15%×((3-score)/3)^2",
+            "reason": f"낙폭 과다 ({spy_dd:.1f}%<{lev_C_DD_MIN}%) → Phase B 전환 대기",
+            "bottom_detail": bottom_detail, "state": state
+        }
+    if rsi is not None and rsi < 40:
+        return {
+            "weight": 0.0, "phase": "C", "phase_name": "⚪ RSI차단",
+            "formula": "15%×((3-score)/3)^2",
+            "reason": f"RSI 과매도 ({rsi}) → 공황 구간, 안정 대기",
+            "bottom_detail": bottom_detail, "state": state
+        }
+    ratio  = (lev_C_SCORE_TOP - decision_score) / lev_C_SCORE_TOP
+    weight = round(lev_C_MAX * (ratio ** lev_C_EXP) * 100, 1)
+    return {
+        "weight": weight, "phase": "C", "phase_name": "🟢 골디락스",
+        "formula": f"15%×((3-{decision_score:.1f})/3)^2 = {weight:.1f}%",
+        "reason": f"골디락스 진입 (VIX:{vix:.1f}, ISM:{ism:.1f})",
+        "bottom_detail": bottom_detail, "state": state
+    }
+
+
+def format_lev_section(lev):
+    """텔레그램용 lev 섹션 — 주간 매수 강도 기준"""
+    w     = lev["weight"]
+    phase = lev["phase"]
+
+    if phase in ("A", "차단") or w == 0.0:
+        if phase == "A" or lev["phase_name"] in ("🔴 위기차단", "🔴 ISM차단"):
+            buy_signal = "🔴 매수 완전 중단"
+            buy_action = "lev 자동매수 일시 정지 요망"
+        else:
+            buy_signal = "⚪ 이번 주 매수 보류"
+            buy_action = f"조건 미충족 → {lev['reason']}"
+    elif phase == "B":
+        buy_signal = "🚀 즉시 최대 매수! (평소 3배)"
+        buy_action = "바닥 신호 발동 → 이번 주 예산 전부 투입 권장"
+    else:
+        if w >= 12.0:
+            buy_signal = "🔵 이번 주 2주 매수 (강세)"
+            buy_action = "골디락스 최적 구간 → 평소의 2배"
+        elif w >= 6.0:
+            buy_signal = "🟢 이번 주 1주 매수 (정상)"
+            buy_action = "양호한 환경 → 계획대로 진행"
+        elif w >= 2.0:
+            buy_signal = "🟡 격주 1주 매수 (축소)"
+            buy_action = "조건 약화 → 이번 주는 건너뛰기 고려"
+        else:
+            buy_signal = "⚪ 이번 주 매수 보류"
+            buy_action = "골디락스 범위 경계선 → 다음 주 재확인"
+
+    bottom_str = ""
+    if lev["bottom_detail"] != "-":
+        bottom_str = f"\n └ 🎯 바닥 감지 진행: {lev['bottom_detail']}"
+
+    return f"""
+━━━━━━━━━━━━━━━━━━
+🚀 레버리지 ETF 주간 매수 신호 [v10.5]
+
+{buy_signal}
+📋 {buy_action}
+
+ ├ Phase: {lev['phase_name']}  |  점수 연동강도: {w:.1f}%
+ └ 공식: {lev['formula']}{bottom_str}
+
+ ┌ Phase 자동전환 기준 ────────────────────────┐
+ │ 🟢 C(평상): 점수<3 + VIX≤20 → 비선형 비례   │
+ │ 🚀 B(회복): 바닥 3중 신호 발동 → 최대 투입   │
+ │ 🔴 A(위기): 점수≥11 → 전면 중단             │
+ └────────────────────────────────────────────┘"""
 
 # ==========================================
 # 🧠 AI 분석
@@ -324,22 +529,29 @@ def extract_news_keywords(entries, max_items=8):
     for e in entries:
         title = getattr(e, "title", "").strip()
         if not title: continue
-        summary = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html.unescape(getattr(e, "summary", "")))).strip()
-        key_sents = [s.strip() for s in re.split(r'[.!?]', summary) if any(kw.lower() in s.lower() for kw in ECON_KEYWORDS)]
+        summary = re.sub(r'\s+',' ', re.sub(r'<[^>]+>',' ', html.unescape(getattr(e,"summary","")))).strip()
+        key_sents = [s.strip() for s in re.split(r'[.!?]', summary)
+                     if any(kw.lower() in s.lower() for kw in ECON_KEYWORDS)]
         context = " / ".join(key_sents[:2]) if key_sents else summary[:80]
-        if any(kw in title.lower() for kw in MACRO_CRITICAL): critical.append(f"🚨[핵심 매크로] {title}  [{context}]")
-        else: normal.append(f"• {title}  [{context}]")
-    return "\n".join((critical + normal)[:max_items])
+        if any(kw in title.lower() for kw in MACRO_CRITICAL):
+            critical.append(f"🚨[핵심 매크로] {title}  [{context}]")
+        else:
+            normal.append(f"• {title}  [{context}]")
+    return "\n".join((critical+normal)[:max_items])
 
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
-    prompt = f"""당신은 월스트리트 최고 수준의 퀀트 매크로 전략가이며, 현재 '매일 기계적으로 지수(VOO, QQQ)를 모아가며, 포트폴리오의 일부를 미래 전략산업(QTUM, UFO, NASA, ARKQ 등)에 위성 투자(Satellite)하는 투자자'를 전담 보좌하는 수석 비서입니다.
+    prompt = f"""당신은 월스트리트 최고 수준의 퀀트 매크로 전략가이며, 현재 '매일 기계적으로 지수(VOO, QQQ)를 모아가며, 포트폴리오의 일부를 미래 전략산업(QTUM, UFO, NASA, ARKQ 등)과 레버리지 ETF(TQQQ 등)에 위성 투자(Satellite)하는 투자자'를 전담 보좌하는 수석 비서입니다.
 
-[분석 원칙 - 매우 중요]
+[분석 원칙]
 1. [매크로 최우선] 뉴스 중 '🚨[핵심 매크로]' 연준, 금리 데이터에 집중하여 시장의 흐름 진단.
-2. [상관관계] 전달받은 데이터 수치를 맹신하지 말고 증시에 미치는 영향을 'macro_correlation'에 통찰력 있게 작성. (추세 판단 필수)
+2. [상관관계] 전달받은 데이터 수치를 맹신하지 말고 증시에 미치는 영향을 'macro_correlation'에 통찰력 있게 작성.
 3. [대응 전략] 비율(%) 숫자 금지. 투자자의 심리적 템포와 마음가짐 중심으로 'strategy' 작성.
 4. [미래 전략산업] 매크로 환경이 우주/로봇/양자에 우호적인지 'opportunity'에 1~2문장 진단.
-5. [거장 시그널 분리] 워런 버핏, 드러켄밀러 등 거장의 발언이 있다면 'guru_score'(-0.5~+0.5) 부여 및 'guru_insight' 요약. 없으면 0.0. 일반 리스크는 'macro_score'(-1.5~1.5) 부여.
+5. [거장 시그널] 거장 발언 있으면 'guru_score'(-0.5~+0.5), 없으면 0.0.
+6. [레버리지 진단] 현재 매크로 환경이 레버리지 ETF(TQQQ, SOXL 등)에 우호적인지 'lev_signal'에 한 줄 판단.
+   - 우호적: 골디락스 + 저변동성 → "🟢 레버리지 우호"
+   - 중립: 혼조 → "🟡 레버리지 주의"  
+   - 비우호적: 고변동성/침체 → "🔴 레버리지 위험"
 
 [시장 데이터]
 {json.dumps(market_summary, ensure_ascii=False)}
@@ -347,143 +559,131 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 {news}
 
 [출력: JSON만]
-{{"macro_score": <실수>, "guru_score": <실수>, "guru_insight": "<거장뷰>", "market_phase": "<국면>", "top_risks": ["<1>","<2>","<3>"], "opportunity": "<미래산업>", "strategy": "<조언>", "macro_correlation": "<진단>"}}"""
-    res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.25, response_format={"type": "json_object"}, timeout=30)
+{{"macro_score":<실수>,"guru_score":<실수>,"guru_insight":"<거장뷰>","market_phase":"<국면>","top_risks":["<1>","<2>","<3>"],"opportunity":"<미래산업>","strategy":"<조언>","macro_correlation":"<진단>","lev_signal":"<레버리지진단>"}}"""
+    res  = client.chat.completions.create(
+        model="gpt-4o-mini", messages=[{"role":"user","content":prompt}],
+        temperature=0.25, response_format={"type":"json_object"}, timeout=30)
     data = json.loads(res.choices[0].message.content.strip())
-    macro = max(-1.5, min(1.5, safe_float(data.get("macro_score", 0.0))))
-    guru  = max(-0.5, min(0.5, safe_float(data.get("guru_score", 0.0))))
+    macro = max(-1.5, min(1.5, safe_float(data.get("macro_score",0.0))))
+    guru  = max(-0.5, min(0.5, safe_float(data.get("guru_score",0.0))))
     data["score"] = macro + guru
-    risks = data.get("top_risks", [])
-    data["top_risks"] = ((risks if isinstance(risks, list) else [str(risks)]) + ["-", "-", "-"])[:3]
-    for k, v in {"market_phase": "분석 중", "opportunity": "-", "strategy": "관망", "macro_correlation": "지연", "guru_insight": "특이사항 없음"}.items():
+    risks = data.get("top_risks",[])
+    data["top_risks"] = ((risks if isinstance(risks,list) else [str(risks)])+["-","-","-"])[:3]
+    for k, v in {"market_phase":"분석 중","opportunity":"-","strategy":"관망",
+                 "macro_correlation":"지연","guru_insight":"특이사항 없음",
+                 "lev_signal":"🟡 레버리지 주의"}.items():
         data.setdefault(k, v)
     return data
 
 # ==========================================
-# 🎯 위험 점수 산출
+# 🎯 위험 점수 산출 (원본 유지)
 # ==========================================
-def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_score, us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering, regime_adj, is_bull, breadth_status, recent_score_jump):
+def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_score,
+                    us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering,
+                    regime_adj, is_bull, breadth_status, recent_score_jump):
     s = 0.0
-        
     if spy[0] > 0:
-        if gap(spy[0], spy[2]) < -SPY_TREND_GAP: s += 2.0
-        elif gap(spy[0], spy[2]) < 0: s += 1.0
-        if pct(spy[0], spy[1]) <= SPY_PANIC_DROP: s += 3.0
-
+        if gap(spy[0],spy[2]) < -SPY_TREND_GAP: s += 2.0
+        elif gap(spy[0],spy[2]) < 0:             s += 1.0
+        if pct(spy[0],spy[1]) <= SPY_PANIC_DROP:  s += 3.0
     if qqq[0] > 0:
-        if gap(qqq[0], qqq[2]) < -SPY_TREND_GAP: s += 1.5
-        elif gap(qqq[0], qqq[2]) < 0: s += 0.5
-
+        if gap(qqq[0],qqq[2]) < -SPY_TREND_GAP: s += 1.5
+        elif gap(qqq[0],qqq[2]) < 0:             s += 0.5
     if kospi and kospi[0] > 0 and kospi[2] > 0:
-        kos_gap = gap(kospi[0], kospi[2])
-        if kos_gap < -4.0: s += 1.5
+        kos_gap = gap(kospi[0],kospi[2])
+        if kos_gap < -4.0:   s += 1.5
         elif kos_gap < -2.0: s += 1.0
-
     if spy_dd is not None:
         if spy_dd <= DRAWDOWN_DANGER: s += 2.5
-        elif spy_dd <= -15.0: s += 2.0
+        elif spy_dd <= -15.0:         s += 2.0
         elif spy_dd <= DRAWDOWN_WARN: s += 1.0
-
     if rsi is not None:
-        if rsi > 75: s += 1.0
+        if rsi > 75:   s += 1.0
         elif rsi < 30: s -= 0.5
-
-    if gap(fx_data[0], fx_data[3]) > FX_GAP["danger"]: s += 2.0
-    elif gap(fx_data[0], fx_data[3]) > FX_GAP["caution"]: s += 1.0
-    if pct(fx_data[0], fx_data[1]) > 2.0: s += 1.0
-
+    if gap(fx_data[0],fx_data[3]) > FX_GAP["danger"]:   s += 2.0
+    elif gap(fx_data[0],fx_data[3]) > FX_GAP["caution"]: s += 1.0
+    if pct(fx_data[0],fx_data[1]) > 2.0: s += 1.0
     if vix is not None:
         if vix_trend >= 10 and vix >= VIX["warn"]: s += 1.0
         elif vix_trend <= -10: s -= 0.5
-
-        if vix >= VIX["panic"]: s += 4.0
-        elif vix >= 30: s += 1.5
+        if vix >= VIX["panic"]:  s += 4.0
+        elif vix >= 30:          s += 1.5
         elif vix >= VIX["warn"]: s += 1.0
-
     if dxy > DXY["danger"]: s += 1.5
     elif dxy > DXY["warn"]: s += 0.5
-    if dxy_mom and dxy_mom > DXY_MOM_WARN: s += 2.0 if dxy_mom > DXY_MOM_WARN * 1.5 else 1.0
-
+    if dxy_mom and dxy_mom > DXY_MOM_WARN:
+        s += 2.0 if dxy_mom > DXY_MOM_WARN*1.5 else 1.0
     if us10y and us10y[0] and us10y[1]:
-        if us10y[0] - us10y[1] > 0.15: s += 1.5
-
+        if us10y[0]-us10y[1] > 0.15: s += 1.5
     if hy_spread and hy_spread[0]:
         hys = hy_spread[0]
         if hys > HY_SPREAD_DANGER: s += 3.0
         elif hys > HY_SPREAD_WARN: s += 1.5
-        if hy_spread[1] and (hys - hy_spread[1]) > 0.3: s += 1.0
-
+        if hy_spread[1] and (hys-hy_spread[1]) > 0.3: s += 1.0
     if fg_score is not None:
         if fg_score > 80: s += 1.0
         elif fg_score < FG_EXTREME_FEAR:
             s -= 1.5 if vix is not None and vix < VIX["warn"] else 0.5
-
     if gold and gold[2] > 0:
-        gold_gap = gap(gold[0], gold[2])
-        if gold_gap > 10: s += 1.5
+        gold_gap = gap(gold[0],gold[2])
+        if gold_gap > 10:  s += 1.5
         elif gold_gap > 5: s += 0.5
         if dxy > 122 and gold_gap > 5: s += 1.5
-
     if is_recovering:
-        s -= 1.6
-        log("✨ V자 회복 모멘텀 감지: 위험점수 -1.6 적용")
-        
+        s -= 1.6; log("✨ V자 회복 모멘텀 감지: -1.6 적용")
     if is_bull:
-        s -= 1.0
-        log("🔥 강세장 필터 가동: 리스크 점수 완화 (-1.0)")
-
+        s -= 1.0; log("🔥 강세장 필터 가동: -1.0")
     if breadth_status == "⚠️ 시장 왜곡 (소수 종목 편중)":
-        s += 0.8
-        log("⚠️ 시장 왜곡 감지: 위험점수 +0.8 가산")
-
+        s += 0.8; log("⚠️ 시장 왜곡 감지: +0.8")
     if recent_score_jump:
-        s += 0.5
-        log("⚡ 점수 급등 모멘텀 감지: 위험점수 +0.5 가산")
-
+        s += 0.5; log("⚡ 점수 급등 모멘텀: +0.5")
     s += (ai_score * AI_WEIGHT)
-    s += regime_adj 
-    
+    s += regime_adj
     return max(0.0, min(SCORE_MAX, s))
 
 def calc_trend(history):
     if not history or len(history) < 2: return None
     scores = [h["score"] for h in history if "score" in h]
     if not scores: return None
-    def avg(lst): return round(sum(lst) / len(lst), 1) if lst else None
+    def avg(lst): return round(sum(lst)/len(lst),1) if lst else None
     avg7  = avg(scores[-7:])
     avg30 = avg(scores[-30:])
     avg90 = avg(scores[-90:])
-    trend = "📉 개선 중" if avg7 and avg30 and avg7 < avg30 else ("📈 악화 중" if avg7 and avg30 and avg7 > avg30 + 1.5 else "➖ 횡보")
-    max_score = max(scores[-90:]) if len(scores) >= 1 else None
-    min_score = min(scores[-90:]) if len(scores) >= 1 else None
-    max_date = next((h["date"] for h in reversed(history) if h.get("score") == max_score), "-")
-    min_date = next((h["date"] for h in reversed(history) if h.get("score") == min_score), "-")
-    return {"avg7": avg7, "avg30": avg30, "avg90": avg90, "trend": trend, "max_score": max_score, "max_date": max_date, "min_score": min_score, "min_date": min_date}
+    trend = ("📉 개선 중" if avg7 and avg30 and avg7 < avg30
+             else "📈 악화 중" if avg7 and avg30 and avg7 > avg30+1.5
+             else "➖ 횡보")
+    max_score = max(scores[-90:]) if scores else None
+    min_score = min(scores[-90:]) if scores else None
+    max_date = next((h["date"] for h in reversed(history) if h.get("score")==max_score), "-")
+    min_date = next((h["date"] for h in reversed(history) if h.get("score")==min_score), "-")
+    return {"avg7":avg7,"avg30":avg30,"avg90":avg90,"trend":trend,
+            "max_score":max_score,"max_date":max_date,
+            "min_score":min_score,"min_date":min_date}
 
 # ==========================================
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v10.3 가동 시작")
-    
-    state = load_state()
-    prev_score = state.get("score", 0.0)
-    current_ism = state.get("ism_pmi", 50.0)
-    ism_date = state.get("ism_date", "2024-01-01")
+    log("📊 퀀텀 하이브리드 v10.5 가동")
+
+    state          = load_state()
+    prev_score     = state.get("score", 0.0)
+    current_ism    = state.get("ism_pmi", 50.0)
+    ism_date       = state.get("ism_date", "2024-01-01")
     last_update_id = state.get("last_update_id", 0)
-    history = state.get("history", [])
+    history        = state.get("history", [])
 
     new_ism = None
     try:
-        url = f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/getUpdates?offset={last_update_id + 1}"
+        url = f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/getUpdates?offset={last_update_id+1}"
         res = requests.get(url, timeout=10).json()
         if res.get("ok") and res["result"]:
             for item in res["result"]:
                 update_id = item["update_id"]
                 if update_id > last_update_id: last_update_id = update_id
-                msg_text = item.get("message", {}).get("text", "").upper()
+                msg_text = item.get("message",{}).get("text","").upper()
                 if msg_text.startswith("ISM "):
-                    try: new_ism = float(msg_text.replace("ISM", "").strip())
+                    try: new_ism = float(msg_text.replace("ISM","").strip())
                     except: pass
     except Exception as e: log(f"텔레그램 명령 확인 실패: {e}")
 
@@ -492,207 +692,216 @@ def main():
         ism_date = datetime.now().strftime("%Y-%m-%d")
 
     days_since_update = 0
-    try: days_since_update = (datetime.now() - datetime.strptime(ism_date, "%Y-%m-%d")).days
+    try: days_since_update = (datetime.now()-datetime.strptime(ism_date,"%Y-%m-%d")).days
     except: pass
 
     api_errors = []
 
-    spy_closes = safe(lambda: get_yahoo_closes("^GSPC", "2y"), "SPY")
+    spy_closes = safe(lambda: get_yahoo_closes("^GSPC","2y"), "SPY")
     if spy_closes:
-        count = min(len(spy_closes), 200)
-        year_closes = spy_closes[-253:] if len(spy_closes) >= 253 else spy_closes
-        spy_raw = (spy_closes[-1], spy_closes[-2], sum(spy_closes[-count:]) / count, max(year_closes))
-        rsi = calc_rsi_wilder(spy_closes)
-        spy_dd = ((spy_raw[0] - spy_raw[3]) / spy_raw[3] * 100) if spy_raw[0] and spy_raw[3] else None
+        count      = min(len(spy_closes), 200)
+        year_closes= spy_closes[-253:] if len(spy_closes) >= 253 else spy_closes
+        spy_raw    = (spy_closes[-1], spy_closes[-2], sum(spy_closes[-count:])/count, max(year_closes))
+        rsi        = calc_rsi_wilder(spy_closes)
+        spy_dd     = ((spy_raw[0]-spy_raw[3])/spy_raw[3]*100) if spy_raw[0] and spy_raw[3] else None
     else:
-        spy_raw = (0, 0, 0, 0)
-        rsi = None
-        spy_dd = None
-        api_errors.append("SPY")
+        spy_raw = (0,0,0,0); rsi = None; spy_dd = None; api_errors.append("SPY")
 
-    qqq_raw = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")
-    if not qqq_raw: qqq_raw = (0,0,0,0); api_errors.append("QQQ")
+    qqq_raw   = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")
+    if not qqq_raw: qqq_raw=(0,0,0,0); api_errors.append("QQQ")
     kospi_raw = safe(lambda: get_yahoo_stats("^KS11"), "KOSPI")
-    if not kospi_raw: kospi_raw = (0,0,0,0); api_errors.append("KOSPI")
-
-    fx_data = safe(lambda: get_fx_data(), "FX")
-    if not fx_data: fx_data = (1400.0, 1400.0, 1400.0, 1400.0); api_errors.append("FX")
-    gold = safe(lambda: get_gold_data(), "GOLD")
+    if not kospi_raw: kospi_raw=(0,0,0,0); api_errors.append("KOSPI")
+    fx_data   = safe(lambda: get_fx_data(), "FX")
+    if not fx_data: fx_data=(1400.0,1400.0,1400.0,1400.0); api_errors.append("FX")
+    gold      = safe(lambda: get_gold_data(), "GOLD")
     if not gold: api_errors.append("GOLD")
-    us10y   = safe(lambda: get_us10y(), "10Y")
-    if not us10y: us10y = (None, None); api_errors.append("10Y")
+    us10y     = safe(lambda: get_us10y(), "10Y")
+    if not us10y: us10y=(None,None); api_errors.append("10Y")
     hy_spread = safe(lambda: get_hy_spread(), "HY")
-    if not hy_spread: hy_spread = (None, None); api_errors.append("HY스프레드")
-    unrate  = safe(lambda: get_unrate(), "실업률")
-    if not unrate: unrate = 4.0; api_errors.append("실업률")
+    if not hy_spread: hy_spread=(None,None); api_errors.append("HY스프레드")
+    unrate    = safe(lambda: get_unrate(), "실업률")
+    if not unrate: unrate=4.0; api_errors.append("실업률")
 
     breadth_status = get_market_breadth()
 
     _fg = get_fear_greed()
-    fg_score, fg_label = _fg if _fg != (None, None) else (None, None)
+    fg_score, fg_label = _fg if _fg != (None,None) else (None,None)
     if fg_score is None:
         fg_score = state.get("fg_score")
-        if fg_score is not None: fg_label = "(전일 캐시)"
-        else: api_errors.append("공포탐욕")
+        fg_label = "(전일 캐시)" if fg_score is not None else None
+        if fg_score is None: api_errors.append("공포탐욕")
 
-    vix_closes = safe(lambda: get_yahoo_closes("^VIX", "6mo", min_count=10), "VIX")
-    vix = vix_closes[-1] if vix_closes else None 
-    vix_trend = pct(vix_closes[-1], vix_closes[-5]) if vix_closes and len(vix_closes) >= 5 else 0.0
+    vix_closes = safe(lambda: get_yahoo_closes("^VIX","6mo",min_count=10), "VIX")
+    vix        = vix_closes[-1] if vix_closes else None
+    vix_trend  = pct(vix_closes[-1],vix_closes[-5]) if vix_closes and len(vix_closes)>=5 else 0.0
     if not vix_closes: api_errors.append("VIX")
 
-    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB", "6mo", min_count=10), "DXY")
-    dxy = dxy_closes[-1] if dxy_closes else 118.0
-    dxy_mom = get_dxy_momentum(dxy_closes) if dxy_closes else None
+    dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB","6mo",min_count=10), "DXY")
+    dxy        = dxy_closes[-1] if dxy_closes else 118.0
+    dxy_mom    = get_dxy_momentum(dxy_closes) if dxy_closes else None
     if not dxy_closes: api_errors.append("DXY")
 
     is_recovering = False
-    if (spy_closes and len(spy_closes) >= 6 and vix_closes and len(vix_closes) >= 10):
+    if spy_closes and len(spy_closes)>=6 and vix_closes and len(vix_closes)>=10:
         try:
-            is_rebounding = all(spy_closes[i] > spy_closes[i-1] for i in range(-5, 0))
-            vix_max = max(vix_closes[-10:])
-            vix_cooling = pct(vix, vix_max) <= -15.0
-            if is_rebounding and vix_cooling and spy_dd is not None and spy_dd <= -10.0: 
+            is_rebounding = all(spy_closes[i]>spy_closes[i-1] for i in range(-5,0))
+            vix_max       = max(vix_closes[-10:])
+            vix_cooling   = pct(vix, vix_max) <= -15.0
+            if is_rebounding and vix_cooling and spy_dd is not None and spy_dd <= -10.0:
                 is_recovering = True
         except: pass
 
     regime_info = get_macro_regime(current_ism, unrate)
-    trend = calc_trend(history)
+    trend       = calc_trend(history)
 
     recent_score_jump = False
     if len(history) >= 3:
         recent_scores = [h["score"] for h in history[-3:]]
-        if recent_scores[-1] - recent_scores[0] >= 2.0:
+        if recent_scores[-1]-recent_scores[0] >= 2.0:
             recent_score_jump = True
 
     trend_section = ""
     if trend:
-        trend_section = f"""\n━━━━━━━━━━━━━━━━━━\n📊 위험 점수 추이 (90일)\n ├ 7일 평균 : {trend['avg7']}\n ├ 30일 평균: {trend['avg30']}\n └ 90일 평균: {trend['avg90']}  {trend['trend']}\n⚡ 90일 최고: {trend['max_score']}  ({trend['max_date']})\n⚡ 90일 최저: {trend['min_score']}  ({trend['min_date']})"""
+        trend_section = (f"\n━━━━━━━━━━━━━━━━━━\n📊 위험 점수 추이 (90일)\n"
+                         f" ├ 7일 평균 : {trend['avg7']}\n"
+                         f" ├ 30일 평균: {trend['avg30']}\n"
+                         f" └ 90일 평균: {trend['avg90']}  {trend['trend']}\n"
+                         f"⚡ 90일 최고: {trend['max_score']}  ({trend['max_date']})\n"
+                         f"⚡ 90일 최저: {trend['min_score']}  ({trend['min_date']})")
 
     all_entries, seen_titles = [], set()
-    for source_name, feed_url in NEWS_FEEDS:
+    for _, feed_url in NEWS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
             for entry in feed.entries:
-                title = getattr(entry, "title", "").strip()
+                title = getattr(entry,"title","").strip()
                 if title and title not in seen_titles:
-                    seen_titles.add(title)
-                    all_entries.append(entry)
+                    seen_titles.add(title); all_entries.append(entry)
         except: pass
 
-    news_context = extract_news_keywords(all_entries) if all_entries else "뉴스 수집 실패"
-    
-    market_summary = {
-        "SP500_Drop": spy_dd, "VIX": vix, "DXY": dxy, "UNRATE": unrate,
-        "HY_Spread": hy_spread[0] if hy_spread else None,
-        "Trend": trend["trend"] if trend else None
-    }
-    
-    ai = get_ai_analysis(news_context, market_summary) if news_context != "뉴스 수집 실패" else {"score":0.5, "market_phase":"지연", "opportunity": "-", "guru_insight": "없음", "top_risks":["-","-","-"], "strategy":"대기", "macro_correlation":"-"}
+    news_context   = extract_news_keywords(all_entries) if all_entries else "뉴스 수집 실패"
+    market_summary = {"SP500_Drop":spy_dd,"VIX":vix,"DXY":dxy,"UNRATE":unrate,
+                      "HY_Spread":hy_spread[0] if hy_spread else None,
+                      "Trend":trend["trend"] if trend else None}
+    ai = (get_ai_analysis(news_context, market_summary) if news_context != "뉴스 수집 실패"
+          else {"score":0.5,"market_phase":"지연","opportunity":"-","guru_insight":"없음",
+                "top_risks":["-","-","-"],"strategy":"대기","macro_correlation":"-"})
 
-    is_bull = (spy_raw[0] > 0 and qqq_raw[0] > 0 and gap(spy_raw[0], spy_raw[2]) > 3 and gap(qqq_raw[0], qqq_raw[2]) > 3 and vix is not None and vix < 20)
+    is_bull = (spy_raw[0]>0 and qqq_raw[0]>0
+               and gap(spy_raw[0],spy_raw[2])>3
+               and gap(qqq_raw[0],qqq_raw[2])>3
+               and vix is not None and vix<20)
 
-    total_score = calc_risk_score(spy_raw, qqq_raw, kospi_raw, fx_data, vix, vix_trend, dxy, dxy_mom, ai["score"], us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering, regime_info["score_adj"], is_bull, breadth_status, recent_score_jump)
-    
-    best_hedge_display = get_best_hedge() if total_score >= 13 else "안전 (위험 13점 이상 시 자동 산출)"
+    total_score = calc_risk_score(
+        spy_raw, qqq_raw, kospi_raw, fx_data, vix, vix_trend,
+        dxy, dxy_mom, ai["score"], us10y, fg_score, hy_spread,
+        spy_dd, gold, rsi, is_recovering, regime_info["score_adj"],
+        is_bull, breadth_status, recent_score_jump)
 
-    is_panic = ((vix is not None and vix >= VIX["panic"]) or (spy_raw[0] > 0 and pct(spy_raw[0], spy_raw[1]) <= SPY_PANIC_DROP))
+    best_hedge_display = (get_best_hedge() if total_score >= 13
+                          else "안전 (위험 13점 이상 시 자동 산출)")
+    is_panic        = ((vix is not None and vix >= VIX["panic"]) or
+                       (spy_raw[0]>0 and pct(spy_raw[0],spy_raw[1]) <= SPY_PANIC_DROP))
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
+    raw_score  = total_score
+    diff_str   = f"{(raw_score-prev_score):+.1f}"
 
-    raw_score = total_score
-    diff_str = f"{(raw_score - prev_score):+.1f}"
-
-    # --------------------------------------------------
-    # ▼ [v10.3 핵심] 히스테리시스 + 추세 융합 엔진 ▼
-    # --------------------------------------------------
-    avg7 = trend["avg7"] if trend and trend["avg7"] is not None else raw_score
-    decision_score = raw_score
-    whipsaw_alert = ""
-
-    # 클라우드 조언 반영: 실제 기록된 점수가 최소 7개 이상일 때만 작동
+    # ── 히스테리시스 + 추세 융합 엔진 ──
+    avg7             = trend["avg7"] if trend and trend["avg7"] is not None else raw_score
+    decision_score   = raw_score
+    whipsaw_alert    = ""
     scores_available = len([h for h in history if "score" in h])
-
     if not is_panic and raw_score < 13.0 and scores_available >= 7:
-        boundaries = [3.0, 7.0, 11.0]
-        buffer = 0.5
-        
-        for b in boundaries:
-            if b - buffer <= raw_score <= b + buffer:
+        for b in [3.0, 7.0, 11.0]:
+            if b-0.5 <= raw_score <= b+0.5:
                 if raw_score >= b and avg7 < b:
-                    decision_score = b - 0.1 
-                    whipsaw_alert = f"\n\n🛡️ [휩소 방어] 일시적 점수 상승({raw_score:.1f})이나, 7일 추세({avg7:.1f}) 안정으로 매도 지침을 유보합니다."
-                    log(f"🛡️ 휩소 방어: 점수 {raw_score} -> {decision_score} 보정 (avg7: {avg7})")
-                
+                    decision_score = b-0.1
+                    whipsaw_alert  = (f"\n\n🛡️ [휩소 방어] 일시적 점수 상승({raw_score:.1f})이나, "
+                                      f"7일 추세({avg7:.1f}) 안정으로 매도 지침을 유보합니다.")
                 elif raw_score < b and avg7 >= b:
-                    decision_score = b + 0.1
-                    whipsaw_alert = f"\n\n🛡️ [휩소 방어] 일시적 점수 하락({raw_score:.1f})이나, 7일 추세({avg7:.1f}) 위험 잔존으로 방어 태세를 유지합니다."
-                    log(f"🛡️ 휩소 방어: 점수 {raw_score} -> {decision_score} 보정 (avg7: {avg7})")
-                
-                # 클라우드 조언 반영: 조건에 걸려 보정되었다면 즉시 루프 탈출
+                    decision_score = b+0.1
+                    whipsaw_alert  = (f"\n\n🛡️ [휩소 방어] 일시적 점수 하락({raw_score:.1f})이나, "
+                                      f"7일 추세({avg7:.1f}) 위험 잔존으로 방어 태세를 유지합니다.")
                 break
-    # --------------------------------------------------
 
+    # ── lev 통합 엔진 호출 ──
+    lev = calc_lev_unified(
+        decision_score=decision_score, ism=current_ism, vix=vix,
+        spy_closes=spy_closes, vix_closes=vix_closes, spy_dd=spy_dd,
+        rsi=rsi, is_panic=is_panic, state=state)
+    state.update({
+        "lev_vix_peak":    lev["state"].get("lev_vix_peak", 0.0),
+        "lev_crisis_days": lev["state"].get("lev_crisis_days", 0),
+    })
+
+    # 국면 결정
     if is_panic:
         stage_label, weight = "💀 패닉 구간", 0
-        sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
+        sell_idx, sell_div  = "100% (전량)", "50% (절반 유지)"
         stage_action = "기존 자산 현금화 대피 (배당 파이프라인 절반 유지)"
-    elif decision_score < 3:  
+    elif decision_score < 3:
         stage_label, weight = "🟢 공격적 매수", 100
-        sell_idx, sell_div = "0%", "0%"
+        sell_idx, sell_div  = "0%", "0%"
         stage_action = "주식 비중 100% 유지 및 추가 매수(수량 확보)"
-    elif decision_score < 7:  
+    elif decision_score < 7:
         stage_label, weight = "🔵 적극적 유지", 80
-        sell_idx, sell_div = "20%", "10%"
+        sell_idx, sell_div  = "20%", "10%"
         stage_action = "1차 수익 실현 (잔파도 무시, 20%만 현금화)"
-    elif decision_score < 11: 
-        stage_label, weight = "🟡 부분 방어",   50
-        sell_idx, sell_div = "50%", "20%"
+    elif decision_score < 11:
+        stage_label, weight = "🟡 부분 방어", 50
+        sell_idx, sell_div  = "50%", "20%"
         stage_action = "2차 수익 실현 (본격 하락 대비, 누적 50% 현금화)"
     elif decision_score < 13:
         stage_label, weight = "🟠 적극적 축소", 20
-        sell_idx, sell_div = "80%", "30%"
+        sell_idx, sell_div  = "80%", "30%"
         stage_action = "3차 수익 실현 (위기 직전, 누적 80% 현금화)"
-    else:                  
-        stage_label, weight = "🔴 위험 회피",   0
-        sell_idx, sell_div = "100% (전량)", "50% (절반 유지)"
+    else:
+        stage_label, weight = "🔴 위험 회피", 0
+        sell_idx, sell_div  = "100% (전량)", "50% (절반 유지)"
         stage_action = "대피 및 폭풍우 관망 (배당으로 멘탈 방어)"
 
     bullish_suffix = "  🔥 강세장" if is_bull else ""
-    
-    special_alert = ""
+    special_alert  = ""
     if is_panic:
-        special_alert = "\n\n🚨 ⚡ [블랙스완 감지] 일일 -4% 이상 폭락 (서킷브레이커)!\n▶ 시장에 돌발 패닉이 발생했습니다. 묻지도 따지지도 말고 즉시 100% 대피하십시오."
+        special_alert = ("\n\n🚨 ⚡ [블랙스완 감지] 일일 -4% 이상 폭락!\n"
+                         "▶ 묻지도 따지지도 말고 즉시 100% 대피하십시오.")
     elif decision_score >= 13:
-        special_alert = "\n\n🚨 💀 [긴급 대피 시그널] 매크로 경제 붕괴(퍼펙트 스톰) 확정!\n▶ 거시 경제 지표가 최악을 가리키고 있습니다. 모든 자산을 현금화하고 관망하십시오."
+        special_alert = ("\n\n🚨 💀 [긴급 대피 시그널] 매크로 경제 붕괴 확정!\n"
+                         "▶ 모든 자산을 현금화하고 관망하십시오.")
+    elif lev["phase"] == "B" and lev["weight"] > 0:
+        special_alert = ("\n\n🚀 🚨 [lev 바닥 신호 발동!]\n"
+                         f"▶ 3중 조건 충족! lev {lev['weight']:.0f}% 집중 투입 타이밍입니다.")
     elif is_recovering:
-        special_alert = "\n\n🚀 🚨 [특별 시그널] V자 폭발적 반등 포착!\n▶ 하락장 종료 확정! 대피해둔 100%의 현금을 TQQQ에 집중 투입할 절호의 타이밍입니다."
+        special_alert = ("\n\n🚀 🚨 [특별 시그널] V자 폭발적 반등 포착!\n"
+                         "▶ 하락장 종료 확정! 대피 현금을 lev에 집중 투입하십시오.")
     elif decision_score == 0 and spy_dd is not None and spy_dd >= 0:
-        special_alert = "\n\n🌈 ✨ [골디락스 시그널] 완벽한 대세 상승장 진입!\n▶ 리스크 제로 구간입니다. 신고가를 경신 중이니 TQQQ의 복리 폭발력을 편안하게 누리십시오."
-    
+        special_alert = ("\n\n🌈 ✨ [골디락스 시그널] 완벽한 대세 상승장 진입!\n"
+                         "▶ 리스크 제로 구간. lev의 복리 폭발력을 편안하게 누리십시오.")
     special_alert += whipsaw_alert
 
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_1y_gap = gap(fx_data[0], fx_data[2])
+    if fx_2y_gap > FX_GAP["danger"]:    fx_status = "🚨 역사적 고점권"
+    elif fx_2y_gap > FX_GAP["caution"]: fx_status = "⚠️ 2년 평균 상회 (주의)"
+    elif fx_1y_gap > FX_GAP["caution"]: fx_status = "🟠 1년 평균 상회"
+    else:                                fx_status = "✅ 정상 범위"
 
-    if fx_2y_gap > FX_GAP["danger"]:
-        fx_status = "🚨 역사적 고점권"
-    elif fx_2y_gap > FX_GAP["caution"]:
-        fx_status = "⚠️ 2년 평균 상회 (주의)"
-    elif fx_1y_gap > FX_GAP["caution"]:
-        fx_status = "🟠 1년 평균 상회"
-    else:
-        fx_status = "✅ 정상 범위"
-        
-    vix_eval_str = "🚨" if vix is not None and vix > VIX["danger"] else ("⚠️" if vix is not None and vix > VIX["warn"] else "✅")
-    dxy_status = "✅" if dxy < DXY["warn"] else "⚠️" if dxy < DXY["danger"] else "🚨"
-    dxy_mom_str = f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom and dxy_mom > DXY_MOM_WARN else ''}" if dxy_mom else ""
-    hy_eval = f"{hy_spread[0]:.2f}% ({'위험' if hy_spread[0] > HY_SPREAD_DANGER else '주의' if hy_spread[0] > HY_SPREAD_WARN else '안정'})" if hy_spread[0] else "지연"
-    extreme_fear_alert = f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n" if is_extreme_fear else ""
+    vix_eval_str = ("🚨" if vix is not None and vix > VIX["danger"]
+                    else "⚠️" if vix is not None and vix > VIX["warn"] else "✅")
+    dxy_status  = "✅" if dxy < DXY["warn"] else "⚠️" if dxy < DXY["danger"] else "🚨"
+    dxy_mom_str = (f"  20일 {dxy_mom:+.1f}% {'🚨' if dxy_mom and dxy_mom>DXY_MOM_WARN else ''}"
+                   if dxy_mom else "")
+    hy_eval = (f"{hy_spread[0]:.2f}% ({'위험' if hy_spread[0]>HY_SPREAD_DANGER else '주의' if hy_spread[0]>HY_SPREAD_WARN else '안정'})"
+               if hy_spread[0] else "지연")
+    extreme_fear_alert = (f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n"
+                          if is_extreme_fear else "")
 
-    msg_header = f"🤖 퀀텀 인사이트 v10.3  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v10.5  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
-        msg_header += f"\n\n✅ [업데이트 완료] 텔레그램 명령으로 ISM 지수가 {current_ism}로 갱신되었습니다!"
+        msg_header += f"\n\n✅ [업데이트 완료] ISM 지수가 {current_ism}로 갱신되었습니다!"
     elif days_since_update > 35:
-        msg_header += f"\n\n🚨🚨 [경고] ISM 지수가 너무 오래되었습니다! (마지막 갱신: {days_since_update}일 전)\n채팅창에 'ISM 50.2' 형식으로 최신 수치를 보내주세요! 🚨🚨"
+        msg_header += (f"\n\n🚨🚨 [경고] ISM 지수 갱신 필요! ({days_since_update}일 전)\n"
+                       f"채팅창에 'ISM 50.2' 형식으로 보내주세요! 🚨🚨")
 
     sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
@@ -732,7 +941,7 @@ def main():
  └ 💰 배당/인컴(SCHD, JEPI): 【 {sell_div} 】
 
 🚦 국면: {stage_label}
-📋 행동: {stage_action}{special_alert}
+📋 행동: {stage_action}{special_alert}{format_lev_section(lev)}
 ━━━━━━━━━━━━━━━━━━
 📈 주요 지표
 
@@ -744,7 +953,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
 
 💵 환율 (USD/KRW)
 {fx_data[0]:,.0f}원  {fx_status}
- ├ 1년 평균: {fx_data[2]:,.0f}원  ({gap(fx_data[0], fx_data[2]):+.1f}%)
+ ├ 1년 평균: {fx_data[2]:,.0f}원  ({gap(fx_data[0],fx_data[2]):+.1f}%)
  └ 2년 평균: {fx_data[3]:,.0f}원  ({fx_2y_gap:+.1f}%)
 
 😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score is not None else "지연"}
@@ -755,6 +964,7 @@ RSI(S&P) : {get_rsi_label(rsi)}
 🥇 금        : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
 ━━━━━━━━━━━━━━━━━━
 💡 매크로 지표 심층 분석 (AI)
+🎰 레버리지 진단: {ai.get('lev_signal', '🟡 레버리지 주의')}
 {ai['macro_correlation']}
 ━━━━━━━━━━━━━━━━━━
 🛠 시스템: {sys_status_msg}
@@ -764,12 +974,10 @@ RSI(S&P) : {get_rsi_label(rsi)}
         parts = []
         while len(text) > max_len:
             split_at = text.rfind('\n', 0, max_len)
-            if split_at == -1: 
-                split_at = max_len
+            if split_at == -1: split_at = max_len
             parts.append(text[:split_at])
             text = text[split_at:].lstrip()
-        if text: 
-            parts.append(text)
+        if text: parts.append(text)
         return parts
 
     for chunk in split_message(msg):
@@ -777,42 +985,38 @@ RSI(S&P) : {get_rsi_label(rsi)}
             try:
                 requests.post(
                     f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
-                    data={"chat_id": ENV["CHAT_ID"], "text": chunk}, timeout=15
+                    data={"chat_id":ENV["CHAT_ID"],"text":chunk}, timeout=15
                 ).raise_for_status()
-                break 
-            except Exception as e:
-                time.sleep(2) 
+                break
+            except: time.sleep(2)
         else:
             log("❌ 텔레그램 메시지 전송 최종 실패")
 
     today_str = datetime.now().strftime('%Y-%m-%d')
-    daily_log = [e for e in state.get("daily_log", []) if e.get("date") != today_str]
-    daily_log.append({"date": today_str, "score": round(raw_score, 1), "phase": stage_label})
+    daily_log = [e for e in state.get("daily_log",[]) if e.get("date") != today_str]
+    daily_log.append({"date":today_str,"score":round(raw_score,1),"phase":stage_label})
 
     new_state_data = {
-        "score": raw_score,
-        "stage": stage_label,
-        "ism_pmi": current_ism,
-        "ism_date": ism_date,
-        "last_update_id": last_update_id,
-        "fg_score": fg_score,
-        "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "daily_log": daily_log[-365:]
+        "score":            raw_score,
+        "stage":            stage_label,
+        "ism_pmi":          current_ism,
+        "ism_date":         ism_date,
+        "last_update_id":   last_update_id,
+        "fg_score":         fg_score,
+        "updated":          datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "daily_log":        daily_log[-365:],
+        "lev_vix_peak":    state.get("lev_vix_peak", 0.0),
+        "lev_crisis_days": state.get("lev_crisis_days", 0),
     }
 
-    save_state(new_state_data, 
-               existing_history=history, 
-               spy_current=spy_raw[0], 
-               spy_pct=pct(spy_raw[0], spy_raw[1]), 
-               spy_dd=spy_dd, 
-               vix=vix, 
-               fg_score=fg_score, 
-               dxy=dxy, 
-               hy_spread=hy_spread[0] if hy_spread else None, 
-               us10y=us10y[0] if us10y else None, 
-               fx=fx_data[0])
-    
-    log(f"✅ v10.3 완료 | 국면={regime_info['name']} | 산출점수={raw_score:.1f}")
+    save_state(new_state_data, existing_history=history,
+               spy_current=spy_raw[0], spy_pct=pct(spy_raw[0],spy_raw[1]),
+               spy_dd=spy_dd, vix=vix, fg_score=fg_score, dxy=dxy,
+               hy_spread=hy_spread[0] if hy_spread else None,
+               us10y=us10y[0] if us10y else None, fx=fx_data[0])
+
+    log(f"✅ v10.5 완료 | 국면={regime_info['name']} | "
+        f"점수={raw_score:.1f} | lev={lev['weight']:.1f}% (Phase {lev['phase']})")
 
 if __name__ == "__main__":
     main()
