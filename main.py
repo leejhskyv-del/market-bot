@@ -501,8 +501,8 @@ def format_LEV_section(LEV):
 
     # 2. 하단 상세 정보 구성 (w 변수를 사용하지 않음)
     bottom_str = ""
-    if LEV["bottom_detail"] != "-":
-        bottom_str = f"\n🎯 바닥 감지: {LEV['bottom_detail']}"
+    if LEV["bottom_detail"] != "-" and "DD" in LEV["bottom_detail"] and float(re.search(r'DD:(-?\d+\.\d+)', LEV["bottom_detail"]).group(1)) <= -10.0:
+        bottom_str = f"\n🎯 바닥 감지 진행: {LEV['bottom_detail']}"
 
     return f"""
 ━━━━━━━━━━━━━━━━━━
