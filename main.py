@@ -592,8 +592,8 @@ def calc_trend(history):
     avg7  = avg(scores[-7:])
     avg30 = avg(scores[-30:])
     avg90 = avg(scores[-90:])
-    trend = ("📉 개선 중" if avg7 and avg30 and avg7 < avg30
-             else "📈 악화 중" if avg7 and avg30 and avg7 > avg30+1.5
+    trend = ("📈 개선 중" if avg7 and avg30 and avg7 < avg30
+             else "📉 악화 중" if avg7 and avg30 and avg7 > avg30+1.5
              else "➖ 횡보")
     max_score = max(scores[-90:]) if scores else None
     min_score = min(scores[-90:]) if scores else None
