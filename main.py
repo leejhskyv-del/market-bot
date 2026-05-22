@@ -473,53 +473,43 @@ def calc_LEV_unified(decision_score, ism, vix, spy_closes, vix_closes,
 
 
 def format_LEV_section(LEV):
-    """텔레그램용 LEV 섹션 — 주간 매수 강도 기준"""
-    w     = LEV["weight"]
+    """텔레그램용 LEV 섹션 — 핵심 신호 중심으로 간결하게"""
+    w = LEV["weight"]
     phase = LEV["phase"]
-
+    
+    # 신호에 따른 이모지 및 핵심 액션
     if phase in ("A", "차단") or w == 0.0:
-        if phase == "A" or LEV["phase_name"] in ("🔴 위기차단", "🔴 ISM차단"):
-            buy_signal = "🔴 매수 완전 중단"
-            buy_action = "LEV 자동매수 일시 정지 요망"
-        else:
-            buy_signal = "⚪ 이번 주 매수 보류"
-            buy_action = f"조건 미충족 → {LEV['reason']}"
+        signal_header = "🔴 [매수 중단]"
+        action = "이번 주는 관망하며 현금을 유지하세요."
     elif phase == "B":
-        buy_signal = "🚀 즉시 최대 매수! (평소 3배)"
-        buy_action = "바닥 신호 발동 → 이번 주 예산 전부 투입 권장"
+        signal_header = "🚀 [집중 매수!]"
+        action = "바닥 신호 발동! 가용 예산을 투입하세요."
     else:
-        if w >= 12.0:
-            buy_signal = "🔵 이번 주 2주 매수 (강세)"
-            buy_action = "골디락스 최적 구간 → 평소의 2배"
-        elif w >= 6.0:
-            buy_signal = "🟢 이번 주 1주 매수 (정상)"
-            buy_action = "양호한 환경 → 계획대로 진행"
-        elif w >= 2.0:
-            buy_signal = "🟡 격주 1주 매수 (축소)"
-            buy_action = "조건 약화 → 이번 주는 건너뛰기 고려"
+        if w >= 10.0:
+            signal_header = "🔵 [적극 매수]"
+            action = "골디락스 구간, 평소의 2배 투입."
+        elif w >= 5.0:
+            signal_header = "🟢 [정상 매수]"
+            action = "계획된 매수를 진행하세요."
         else:
-            buy_signal = "⚪ 이번 주 매수 보류"
-            buy_action = "골디락스 범위 경계선 → 다음 주 재확인"
+            signal_header = "🟡 [매수 축소]"
+            action = "조건이 약합니다. 매수를 줄이거나 보류하세요."
 
+    # 바닥 감지 정보가 있을 때만 출력 (없으면 숨김)
     bottom_str = ""
-    if LEV["bottom_detail"] != "-":
-        bottom_str = f"\n └ 🎯 바닥 감지 진행: {LEV['bottom_detail']}"
+    if LEV["bottom_detail"] != "-" and phase == "B":
+        bottom_str = f"\n🎯 바닥 감지: {LEV['bottom_detail']}"
 
     return f"""
 ━━━━━━━━━━━━━━━━━━
-🚀 레버리지 ETF 주간 매수 신호 [v10.5]
+🚀 레버리지 전략 [v10.5]
 
-{buy_signal}
-📋 {buy_action}
+{signal_header}
+📋 {action}
 
- ├ Phase: {LEV['phase_name']}  |  점수 연동강도: {w:.1f}%
- └ 공식: {LEV['formula']}{bottom_str}
-
- ┌ Phase 자동전환 기준 ────────────────────────┐
- │ 🟢 C(평상): 점수<3 + VIX≤20 → 비선형 비례   │
- │ 🚀 B(회복): 바닥 3중 신호 발동 → 최대 투입   │
- │ 🔴 A(위기): 점수≥11 → 전면 중단             │
- └────────────────────────────────────────────┘"""
+ ├ 위성 비중 : {w:.1f}%
+ └ 시장 국면 : {LEV['phase_name']} {bottom_str}
+━━━━━━━━━━━━━━━━━━"""
 
 # ==========================================
 # 🧠 AI 분석
