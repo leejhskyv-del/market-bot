@@ -510,9 +510,7 @@ def format_LEV_section(LEV):
 
 {buy_signal}
 📋 {buy_action}
-
- └ 국면: {LEV['phase_name']}{bottom_str}
- """
+ └ 국면: {LEV['phase_name']}{bottom_str}"""
 
 # ==========================================
 # 🧠 AI 분석
