@@ -859,7 +859,7 @@ def main():
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
     # ── S&P 지수 포맷 ──
-    def fmt_idx_compact(c, p, sma):
+    def fmt_idx_compact(c, p, sma, _=None):
         if c == 0: return "데이터 지연"
         return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%  |  200일: {gap(c,sma):+.1f}%"
 
@@ -903,10 +903,10 @@ def main():
 ━━━━━━━━━━━━━━━━━━
 📈 시장 지수
 
-S&P 500: {fmt_idx_compact(*spy_raw)}
+S&P 500: {fmt_idx_compact(spy_raw[0], spy_raw[1], spy_raw[2])}
  └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
-NASDAQ : {fmt_idx_compact(*qqq_raw)}
-KOSPI  : {fmt_idx_compact(*kospi_raw)}
+NASDAQ : {fmt_idx_compact(qqq_raw[0], qqq_raw[1], qqq_raw[2])}
+KOSPI  : {fmt_idx_compact(kospi_raw[0], kospi_raw[1], kospi_raw[2])}
 RSI(S&P): {get_rsi_label(rsi)}
 시장 폭 : {breadth_status}
 ━━━━━━━━━━━━━━━━━━
