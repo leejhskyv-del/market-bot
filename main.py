@@ -8,7 +8,7 @@ from openai import OpenAI
 # ==========================================
 # ⚙️ 설정 & 상수
 # ==========================================
-logging.basicConfig(LEVel=logging.INFO, format="%(asctime)s - %(LEVelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 def log(msg): logging.info(msg)
 
 UNRATE_THRESHOLD = 4.2
