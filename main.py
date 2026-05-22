@@ -27,29 +27,24 @@ DRAWDOWN_DANGER  = -20.0
 AI_WEIGHT        = 0.5
 
 # ==========================================
-# 🚀 LEV 통합 엔진 파라미터 (v10.5 백테스트 검증 완료)
+# 🚀 LEV 통합 엔진 파라미터 (v10.5 백테스트 검증)
 # ==========================================
-# Phase A (위기): 점수≥11 or 패닉 → 0% 전면 차단
 LEV_CRISIS_THRESHOLD = 11.0
-
-# Phase B (바닥 회복 — 완화 조건)
-LEV_B_MAX       = 0.25    # 최대 25%
-LEV_B_EXP       = 1.5     # 지수
-LEV_B_SCORE_TOP = 12.0    # ★ v10.5: 8→12 (위기 직후 높은 점수에서도 진입 허용)
-LEV_B_VIX_MAX   = 30      # VIX 30 이하
-BOTTOM_DD_MIN    = -20.0   # 낙폭 -20% 이상
-BOTTOM_VIX_PEAK  = 35      # 위기 중 VIX 35 이상 도달
-BOTTOM_CONSEC    = 3       # 연속 상승일
-BOTTOM_VIX_COOL  = 0.15    # VIX 고점 대비 15% 냉각
-BOTTOM_MIN_DAYS  = 10      # ★ v10.5: 15→10 (V자 반등 초입 빠른 포착)
-
-# Phase C (골디락스 평상시 — 엄격 조건)
-LEV_C_MAX       = 0.15    # 최대 15%
-LEV_C_EXP       = 2.0     # 이차함수
-LEV_C_SCORE_TOP = 3.0     # score 3 이하
-LEV_C_VIX_MAX   = 20      # VIX 20 이하
-LEV_C_DD_MIN    = -15.0   # 낙폭 -15% 이상
-LEV_ISM_MIN     = 47.0    # ★ v10.5: 50→47 (서비스업 주도 상승장 포착)
+LEV_B_MAX       = 0.25
+LEV_B_EXP       = 1.5
+LEV_B_SCORE_TOP = 12.0
+LEV_B_VIX_MAX   = 30
+BOTTOM_DD_MIN   = -20.0
+BOTTOM_VIX_PEAK = 35
+BOTTOM_CONSEC   = 3
+BOTTOM_VIX_COOL = 0.15
+BOTTOM_MIN_DAYS = 10
+LEV_C_MAX       = 0.15
+LEV_C_EXP       = 2.0
+LEV_C_SCORE_TOP = 3.0
+LEV_C_VIX_MAX   = 20
+LEV_C_DD_MIN    = -15.0
+LEV_ISM_MIN     = 47.0
 
 RETRY_COUNT = 4
 RETRY_DELAY = 15
@@ -129,7 +124,7 @@ def load_state():
     except:
         return {"score": 0.0, "ism_pmi": 50.0, "ism_date": "2024-01-01",
                 "last_update_id": 0, "history": [],
-                "LEV_vix_peak": 0.0, "LEV_crisis_days": 0}
+                "lev_vix_peak": 0.0, "lev_crisis_days": 0}
 
 def save_state(state_data, existing_history, spy_current=None, spy_pct=None,
                spy_dd=None, vix=None, fg_score=None, dxy=None,
@@ -243,15 +238,16 @@ def get_market_breadth():
     except: return "산출 불가"
 
 def get_best_hedge():
+    """위기시 최적 대피처 — (자산명, 수익률문자열) 튜플 반환"""
     tickers = {"GLD":"금","TLT":"국채","UUP":"달러"}
     res = {}
     for t in tickers:
         try:
             c = get_yahoo_closes(t,"3mo"); res[tickers[t]] = pct(c[-1],c[0])
         except: continue
-    if not res: return "산출 불가"
+    if not res: return None, None
     best = max(res, key=res.get)
-    return f"{best} ({res[best]:+.1f}%)"
+    return best, f"{res[best]:+.1f}%"
 
 # ==========================================
 # 😨 Fear & Greed
@@ -285,10 +281,6 @@ def get_fear_greed():
             if attempt < 3: time.sleep(10)
     return None, None
 
-def format_index(c, p, sma, _=None):
-    if c == 0: return "데이터 지연"
-    return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%\n └ 200일선 대비: {gap(c,sma):+.1f}%"
-
 def get_drawdown_label(dd):
     if dd is None:            return "산출 불가"
     if dd >= 0:               return "🔥 신고점 갱신"
@@ -319,7 +311,7 @@ def get_gold_signal(gold):
 def get_macro_regime(ism, unrate):
     if ism >= 50.0 and unrate <= UNRATE_THRESHOLD:
         return {"emoji":"🟢","name":"골디락스 (안정적 성장)","score_adj":-1.5,
-                "action":"최적 환경. 단기 노이즈 무시 (LEV 홀딩 우대)"}
+                "action":"최적 환경. 단기 노이즈 무시 (레버리지 홀딩 우대)"}
     elif ism >= 50.0 and unrate > UNRATE_THRESHOLD:
         return {"emoji":"🟡","name":"경기 과열 / 둔화 초기","score_adj":+0.5,
                 "action":"성장은 유지되나 고용 둔화. 주의 필요"}
@@ -331,33 +323,27 @@ def get_macro_regime(ism, unrate):
                 "action":"혹한기 진입 가능성. 폭락 위험 극대화 (대피 우선)"}
 
 # ==========================================
-# 🚀 LEV 통합 엔진 v10.5 (백테스트 검증 완료)
+# 🚀 LEV 통합 엔진
 # ==========================================
 def _update_bottom_tracker(spy_closes, vix_closes, spy_dd, state):
-    """낙폭 -10% 이상 구간: VIX 최고점 기록 + 위기 일수 카운트"""
     if not vix_closes: return state
     vix_now     = vix_closes[-1]
-    vix_peak    = state.get("LEV_vix_peak", 0.0)
-    crisis_days = state.get("LEV_crisis_days", 0)
+    vix_peak    = state.get("lev_vix_peak", 0.0)
+    crisis_days = state.get("lev_crisis_days", 0)
     if spy_dd is not None and spy_dd <= -10.0:
         crisis_days += 1
-        if vix_now and vix_now > vix_peak:
-            vix_peak = vix_now
+        if vix_now and vix_now > vix_peak: vix_peak = vix_now
     elif spy_dd is not None and spy_dd > -5.0:
-        vix_peak = 0.0
-        crisis_days = 0
-    state["LEV_vix_peak"]    = round(vix_peak, 2)
-    state["LEV_crisis_days"] = crisis_days
+        vix_peak = 0.0; crisis_days = 0
+    state["lev_vix_peak"]    = round(vix_peak, 2)
+    state["lev_crisis_days"] = crisis_days
     return state
 
-
 def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
-    """바닥 3중 조건 체크"""
-    if not spy_closes or not vix_closes:
-        return False, 0, "데이터 없음"
+    if not spy_closes or not vix_closes: return False, 0, "데이터 없음"
     vix_now     = vix_closes[-1]
-    vix_peak    = state.get("LEV_vix_peak", 0.0)
-    crisis_days = state.get("LEV_crisis_days", 0)
+    vix_peak    = state.get("lev_vix_peak", 0.0)
+    crisis_days = state.get("lev_crisis_days", 0)
     c1 = spy_dd is not None and spy_dd <= BOTTOM_DD_MIN
     c2 = vix_peak >= BOTTOM_VIX_PEAK
     c3_rally = (len(spy_closes) >= BOTTOM_CONSEC + 1 and
@@ -365,7 +351,7 @@ def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
     vix_10d_max = max(vix_closes[-10:]) if len(vix_closes) >= 10 else vix_now
     c3_cool     = vix_now < vix_10d_max * (1 - BOTTOM_VIX_COOL)
     c3          = c3_rally and c3_cool
-    min_wait    = crisis_days >= BOTTOM_MIN_DAYS  # ★ v10.5: 10일
+    min_wait    = crisis_days >= BOTTOM_MIN_DAYS
     count       = sum([c1, c2, c3])
     all_met     = c1 and c2 and c3 and min_wait
     detail      = (f"DD:{spy_dd:.1f}%{'✅' if c1 else '❌'} "
@@ -374,143 +360,109 @@ def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
                    f"({crisis_days}일/{BOTTOM_MIN_DAYS}일)")
     return all_met, count, detail
 
-
-def calc_LEV_unified(decision_score, ism, vix, spy_closes, vix_closes,
-                       spy_dd, rsi, is_panic, state):
-    """
-    LEV 통합 엔진 v10.5 — 백테스트 검증 완료 (25년 DCA 1031% 수익)
-
-    실행 순서 (★ v10.5 핵심 변경):
-      1. Phase A (위기/패닉) → 전면 차단
-      2. Phase B (바닥 신호) → ISM 무시하고 즉시 진입  ← 순서 변경
-      3. ISM 차단            → Phase C에만 적용
-      4. Phase C (골디락스)  → 비선형 복리
-
-    변경 요약 (v10.4 → v10.5):
-      B_SCORE_TOP: 8 → 12  (위기 직후 높은 점수에서도 진입)
-      ISM_MIN: 50 → 47     (서비스업 주도 상승장 포착)
-      BOTTOM_MIN_DAYS: 15 → 10  (V자 초입 빠른 포착)
-      ISM 차단 위치: Phase B 이후로 이동  (가장 중요)
-    """
+def calc_lev_unified(decision_score, ism, vix, spy_closes, vix_closes,
+                     spy_dd, rsi, is_panic, state):
     state = _update_bottom_tracker(spy_closes, vix_closes, spy_dd, state)
-
-    # ── [1순위] Phase A: 위기/패닉 ──
-    if is_panic or decision_score >= LEV_CRISIS_THRESHOLD:
-        return {
-            "weight": 0.0, "phase": "A", "phase_name": "🔴 위기차단",
-            "formula": "-", "reason": "패닉/위기 구간 → LEV 전량 차단",
-            "bottom_detail": "-", "state": state
-        }
-
-    # 바닥 조건 체크
     bottom_met, bottom_count, bottom_detail = _check_bottom_conditions(
         spy_closes, vix_closes, spy_dd, state)
 
-    # ── [2순위] Phase B: 바닥 회복 (★ ISM보다 먼저 — 위기후 ISM은 후행지표) ──
+    if is_panic or decision_score >= LEV_CRISIS_THRESHOLD:
+        return {"weight":0.0,"phase":"A","phase_name":"🔴 위기차단",
+                "reason":"패닉/위기 구간 → 레버리지 전량 차단",
+                "bottom_detail":bottom_detail,"state":state}
+
     if bottom_met:
         if vix is not None and vix > LEV_B_VIX_MAX:
-            return {
-                "weight": 0.0, "phase": "B", "phase_name": "🟡 B조건미달",
-                "formula": f"25%×((12-score)/12)^1.5",
-                "reason": f"바닥 신호 있으나 VIX 과열 ({vix:.1f}>{LEV_B_VIX_MAX}) → 대기",
-                "bottom_detail": bottom_detail, "state": state
-            }
+            return {"weight":0.0,"phase":"B","phase_name":"🟡 B조건미달",
+                    "reason":f"바닥 신호 있으나 VIX 과열 ({vix:.1f}>{LEV_B_VIX_MAX}) → 대기",
+                    "bottom_detail":bottom_detail,"state":state}
         score_factor = max(0.0, (LEV_B_SCORE_TOP - decision_score) / LEV_B_SCORE_TOP)
         weight = round(LEV_B_MAX * (score_factor ** LEV_B_EXP) * 100, 1)
-        return {
-            "weight": weight, "phase": "B", "phase_name": "🚀 바닥회복",
-            "formula": f"25%×((12-{decision_score:.1f})/12)^1.5 = {weight:.1f}%",
-            "reason": "바닥 3중 신호 완전 충족 → 공격적 재진입 (ISM 무시)",
-            "bottom_detail": bottom_detail, "state": state
-        }
+        return {"weight":weight,"phase":"B","phase_name":"🚀 바닥회복",
+                "reason":"바닥 3중 신호 완전 충족 → 공격적 재진입 (ISM 무시)",
+                "bottom_detail":bottom_detail,"state":state}
 
-    # ── [3순위] ISM 차단 (★ Phase C에만 적용, 기준 47로 완화) ──
     if ism is not None and ism < LEV_ISM_MIN:
-        return {
-            "weight": 0.0, "phase": "차단", "phase_name": "🔴 ISM차단",
-            "formula": "-",
-            "reason": f"ISM 수축 ({ism:.1f}<{LEV_ISM_MIN}) → 골디락스 레버리지 금지",
-            "bottom_detail": bottom_detail, "state": state
-        }
+        return {"weight":0.0,"phase":"차단","phase_name":"🔴 ISM차단",
+                "reason":f"ISM 수축 ({ism:.1f}<{LEV_ISM_MIN}) → 골디락스 레버리지 금지",
+                "bottom_detail":bottom_detail,"state":state}
 
-    # ── [4순위] Phase C: 골디락스 비선형 (Gemini 방식) ──
     if decision_score >= LEV_C_SCORE_TOP:
-        return {
-            "weight": 0.0, "phase": "C", "phase_name": "⚪ 점수초과",
-            "formula": "15%×((3-score)/3)^2",
-            "reason": f"점수 {decision_score:.1f}점 ≥ {LEV_C_SCORE_TOP}점 → 골디락스 범위 이탈",
-            "bottom_detail": bottom_detail, "state": state
-        }
+        return {"weight":0.0,"phase":"C","phase_name":"⚪ 점수초과",
+                "reason":f"점수 {decision_score:.1f}점 ≥ {LEV_C_SCORE_TOP}점 → 골디락스 범위 이탈",
+                "bottom_detail":bottom_detail,"state":state}
     if vix is not None and vix > LEV_C_VIX_MAX:
-        return {
-            "weight": 0.0, "phase": "C", "phase_name": "⚪ VIX차단",
-            "formula": "15%×((3-score)/3)^2",
-            "reason": f"VIX 과열 ({vix:.1f}>{LEV_C_VIX_MAX}) → 진입 금지",
-            "bottom_detail": bottom_detail, "state": state
-        }
+        return {"weight":0.0,"phase":"C","phase_name":"⚪ VIX차단",
+                "reason":f"VIX 과열 ({vix:.1f}>{LEV_C_VIX_MAX}) → 진입 금지",
+                "bottom_detail":bottom_detail,"state":state}
     if spy_dd is not None and spy_dd < LEV_C_DD_MIN:
-        return {
-            "weight": 0.0, "phase": "C", "phase_name": "⚪ 낙폭차단",
-            "formula": "15%×((3-score)/3)^2",
-            "reason": f"낙폭 과다 ({spy_dd:.1f}%<{LEV_C_DD_MIN}%) → Phase B 전환 대기",
-            "bottom_detail": bottom_detail, "state": state
-        }
+        return {"weight":0.0,"phase":"C","phase_name":"⚪ 낙폭차단",
+                "reason":f"낙폭 과다 ({spy_dd:.1f}%<{LEV_C_DD_MIN}%) → Phase B 전환 대기",
+                "bottom_detail":bottom_detail,"state":state}
     if rsi is not None and rsi < 40:
-        return {
-            "weight": 0.0, "phase": "C", "phase_name": "⚪ RSI차단",
-            "formula": "15%×((3-score)/3)^2",
-            "reason": f"RSI 과매도 ({rsi}) → 공황 구간, 안정 대기",
-            "bottom_detail": bottom_detail, "state": state
-        }
+        return {"weight":0.0,"phase":"C","phase_name":"⚪ RSI차단",
+                "reason":f"RSI 과매도 ({rsi}) → 공황 구간, 안정 대기",
+                "bottom_detail":bottom_detail,"state":state}
+
     ratio  = (LEV_C_SCORE_TOP - decision_score) / LEV_C_SCORE_TOP
     weight = round(LEV_C_MAX * (ratio ** LEV_C_EXP) * 100, 1)
-    return {
-        "weight": weight, "phase": "C", "phase_name": "🟢 골디락스",
-        "formula": f"15%×((3-{decision_score:.1f})/3)^2 = {weight:.1f}%",
-        "reason": f"골디락스 진입 (VIX:{vix:.1f}, ISM:{ism:.1f})",
-        "bottom_detail": bottom_detail, "state": state
-    }
+    return {"weight":weight,"phase":"C","phase_name":"🟢 골디락스",
+            "reason":f"골디락스 진입 (VIX:{vix:.1f}, ISM:{ism:.1f})",
+            "bottom_detail":bottom_detail,"state":state}
 
 
-def format_LEV_section(LEV):
-    """텔레그램용 LEV 섹션 — 위성 비중 텍스트 삭제 버전"""
-    w = LEV["weight"]
-    phase = LEV["phase"]
+def format_lev_section(lev, lev_signal):
+    """
+    v10.6 레이아웃:
+    매수신호 → 행동 → Phase + 바닥감지(데이터 있을 때만) → AI레버리지진단
+    """
+    w     = lev["weight"]
+    phase = lev["phase"]
+    vix_peak    = lev["state"].get("lev_vix_peak", 0.0)
+    crisis_days = lev["state"].get("lev_crisis_days", 0)
 
-    # 1. 매수 신호 메시지 결정 (이 부분은 유지)
+    # ── 매수 신호 결정 ──
     if phase in ("A", "차단") or w == 0.0:
-        if phase == "A" or LEV["phase_name"] in ("🔴 위기차단", "🔴 ISM차단"):
-            buy_signal = "🔴 [매수 완전 중단]"
-            buy_action = "LEV 자동매수 일시 정지 요망"
+        if phase == "A" or lev["phase_name"] in ("🔴 위기차단", "🔴 ISM차단"):
+            buy_signal = "🔴 매수 완전 중단"
+            buy_action = "레버리지 ETF 자동매수 일시 정지 요망"
         else:
-            buy_signal = "⚪ [이번 주 매수 보류]"
-            buy_action = f"조건 미충족 → {LEV['reason']}"
+            buy_signal = "⚪ 이번 주 매수 보류"
+            buy_action = f"조건 미충족 → {lev['reason']}"
     elif phase == "B":
-        buy_signal = "🚀 [즉시 집중 매수!]"
-        buy_action = "바닥 신호 발동 → 예산 전부 투입 권장"
+        buy_signal = "🚀 즉시 최대 매수! (평소 3배)"
+        buy_action = "바닥 신호 발동 → 이번 주 예산 전부 투입 권장"
     else:
-        if w >= 10.0:
-            buy_signal = "🔵 [적극 매수]"
-            buy_action = "골디락스 구간, 평소의 2배 투입."
-        elif w >= 5.0:
-            buy_signal = "🟢 [정상 매수]"
-            buy_action = "양호한 환경, 계획대로 진행."
+        if w >= 12.0:
+            buy_signal = "🔵 이번 주 2주 매수 (강세)"
+            buy_action = "골디락스 최적 구간 → 평소의 2배"
+        elif w >= 6.0:
+            buy_signal = "🟢 이번 주 1주 매수 (정상)"
+            buy_action = "양호한 환경 → 계획대로 진행"
+        elif w >= 2.0:
+            buy_signal = "🟡 격주 1주 매수 (축소)"
+            buy_action = "조건 약화 → 이번 주는 건너뛰기 고려"
         else:
-            buy_signal = "🟡 [매수 축소]"
-            buy_action = "조건이 약함, 비중을 줄이세요."
+            buy_signal = "⚪ 이번 주 매수 보류"
+            buy_action = "골디락스 범위 경계선 → 다음 주 재확인"
 
-    # 2. 하단 상세 정보 구성 (w 변수를 사용하지 않음)
-    bottom_str = ""
-    if LEV["bottom_detail"] != "-" and "DD" in LEV["bottom_detail"] and float(re.search(r'DD:(-?\d+\.\d+)', LEV["bottom_detail"]).group(1)) <= -10.0:
-        bottom_str = f"\n🎯 바닥 감지 진행: {LEV['bottom_detail']}"
+    # ── Phase 줄 (바닥감지 데이터 있을 때만 두 줄, 없으면 한 줄) ──
+    has_bottom_data = vix_peak > 0 or crisis_days > 0
+    if has_bottom_data:
+        phase_line = (f" ├ Phase: {lev['phase_name']}\n"
+                      f" └ 바닥 감지: {lev['bottom_detail']}")
+    else:
+        phase_line = f" └ Phase: {lev['phase_name']}"
 
     return f"""
 ━━━━━━━━━━━━━━━━━━
-🚀 레버리지 전략 [v10.5]
+🚀 레버리지 ETF 주간 매수 신호 [v10.6]
 
 {buy_signal}
 📋 {buy_action}
- └ 국면: {LEV['phase_name']}{bottom_str}"""
+{phase_line}
+
+🎰 AI 레버리지 진단: {lev_signal}"""
 
 # ==========================================
 # 🧠 AI 분석
@@ -539,9 +491,9 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 3. [대응 전략] 비율(%) 숫자 금지. 투자자의 심리적 템포와 마음가짐 중심으로 'strategy' 작성.
 4. [미래 전략산업] 매크로 환경이 우주/로봇/양자에 우호적인지 'opportunity'에 1~2문장 진단.
 5. [거장 시그널] 거장 발언 있으면 'guru_score'(-0.5~+0.5), 없으면 0.0.
-6. [레버리지 진단] 현재 매크로 환경이 레버리지 ETF(TQQQ, SOXL 등)에 우호적인지 'LEV_signal'에 한 줄 판단.
+6. [레버리지 진단] 현재 매크로 환경이 레버리지 ETF(TQQQ, SOXL 등)에 우호적인지 'lev_signal'에 한 줄 판단.
    - 우호적: 골디락스 + 저변동성 → "🟢 레버리지 우호"
-   - 중립: 혼조 → "🟡 레버리지 주의"  
+   - 중립: 혼조 → "🟡 레버리지 주의"
    - 비우호적: 고변동성/침체 → "🔴 레버리지 위험"
 
 [시장 데이터]
@@ -550,7 +502,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 {news}
 
 [출력: JSON만]
-{{"macro_score":<실수>,"guru_score":<실수>,"guru_insight":"<거장뷰>","market_phase":"<국면>","top_risks":["<1>","<2>","<3>"],"opportunity":"<미래산업>","strategy":"<조언>","macro_correlation":"<진단>","LEV_signal":"<레버리지진단>"}}"""
+{{"macro_score":<실수>,"guru_score":<실수>,"guru_insight":"<거장뷰>","market_phase":"<국면>","top_risks":["<1>","<2>","<3>"],"opportunity":"<미래산업>","strategy":"<조언>","macro_correlation":"<진단>","lev_signal":"<레버리지진단>"}}"""
     res  = client.chat.completions.create(
         model="gpt-4o-mini", messages=[{"role":"user","content":prompt}],
         temperature=0.25, response_format={"type":"json_object"}, timeout=30)
@@ -562,12 +514,12 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
     data["top_risks"] = ((risks if isinstance(risks,list) else [str(risks)])+["-","-","-"])[:3]
     for k, v in {"market_phase":"분석 중","opportunity":"-","strategy":"관망",
                  "macro_correlation":"지연","guru_insight":"특이사항 없음",
-                 "LEV_signal":"🟡 레버리지 주의"}.items():
+                 "lev_signal":"🟡 레버리지 주의"}.items():
         data.setdefault(k, v)
     return data
 
 # ==========================================
-# 🎯 위험 점수 산출 (원본 유지)
+# 🎯 위험 점수 산출
 # ==========================================
 def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_score,
                     us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering,
@@ -655,7 +607,7 @@ def calc_trend(history):
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v10.5 가동")
+    log("📊 퀀텀 하이브리드 v10.6 가동")
 
     state          = load_state()
     prev_score     = state.get("score", 0.0)
@@ -751,14 +703,14 @@ def main():
         if recent_scores[-1]-recent_scores[0] >= 2.0:
             recent_score_jump = True
 
+    # 90일 추이 섹션
     trend_section = ""
     if trend:
-        trend_section = (f"\n━━━━━━━━━━━━━━━━━━\n📊 위험 점수 추이 (90일)\n"
-                         f" ├ 7일 평균 : {trend['avg7']}\n"
-                         f" ├ 30일 평균: {trend['avg30']}\n"
-                         f" └ 90일 평균: {trend['avg90']}  {trend['trend']}\n"
-                         f"⚡ 90일 최고: {trend['max_score']}  ({trend['max_date']})\n"
-                         f"⚡ 90일 최저: {trend['min_score']}  ({trend['min_date']})")
+        trend_section = (f"\n📊 위험 점수 추이 (90일)\n"
+                         f" ├ 7일: {trend['avg7']}  /  30일: {trend['avg30']}  /  90일: {trend['avg90']}\n"
+                         f" ├ {trend['trend']}\n"
+                         f" └ 최고: {trend['max_score']} ({trend['max_date']})  "
+                         f"최저: {trend['min_score']} ({trend['min_date']})")
 
     all_entries, seen_titles = [], set()
     for _, feed_url in NEWS_FEEDS:
@@ -776,7 +728,8 @@ def main():
                       "Trend":trend["trend"] if trend else None}
     ai = (get_ai_analysis(news_context, market_summary) if news_context != "뉴스 수집 실패"
           else {"score":0.5,"market_phase":"지연","opportunity":"-","guru_insight":"없음",
-                "top_risks":["-","-","-"],"strategy":"대기","macro_correlation":"-"})
+                "top_risks":["-","-","-"],"strategy":"대기","macro_correlation":"-",
+                "lev_signal":"🟡 레버리지 주의"})
 
     is_bull = (spy_raw[0]>0 and qqq_raw[0]>0
                and gap(spy_raw[0],spy_raw[2])>3
@@ -789,8 +742,6 @@ def main():
         spy_dd, gold, rsi, is_recovering, regime_info["score_adj"],
         is_bull, breadth_status, recent_score_jump)
 
-    best_hedge_display = (get_best_hedge() if total_score >= 13
-                          else "안전 (위험 13점 이상 시 자동 산출)")
     is_panic        = ((vix is not None and vix >= VIX["panic"]) or
                        (spy_raw[0]>0 and pct(spy_raw[0],spy_raw[1]) <= SPY_PANIC_DROP))
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
@@ -815,17 +766,17 @@ def main():
                                       f"7일 추세({avg7:.1f}) 위험 잔존으로 방어 태세를 유지합니다.")
                 break
 
-    # ── LEV 통합 엔진 호출 ──
-    LEV = calc_LEV_unified(
+    # ── LEV 통합 엔진 ──
+    lev = calc_lev_unified(
         decision_score=decision_score, ism=current_ism, vix=vix,
         spy_closes=spy_closes, vix_closes=vix_closes, spy_dd=spy_dd,
         rsi=rsi, is_panic=is_panic, state=state)
     state.update({
-        "LEV_vix_peak":    LEV["state"].get("LEV_vix_peak", 0.0),
-        "LEV_crisis_days": LEV["state"].get("LEV_crisis_days", 0),
+        "lev_vix_peak":    lev["state"].get("lev_vix_peak", 0.0),
+        "lev_crisis_days": lev["state"].get("lev_crisis_days", 0),
     })
 
-    # 국면 결정
+    # ── 국면 결정 ──
     if is_panic:
         stage_label, weight = "💀 패닉 구간", 0
         sell_idx, sell_div  = "100% (전량)", "50% (절반 유지)"
@@ -851,6 +802,14 @@ def main():
         sell_idx, sell_div  = "100% (전량)", "50% (절반 유지)"
         stage_action = "대피 및 폭풍우 관망 (배당으로 멘탈 방어)"
 
+    # ── 위기 대피처 (13점+ or 패닉 시에만 표시) ──
+    crisis_hedge_str = ""
+    if total_score >= 13 or is_panic:
+        hedge_asset, hedge_pct = get_best_hedge()
+        if hedge_asset:
+            crisis_hedge_str = f"\n └ 🚨 현금 대피처: {hedge_asset} 매수 권장 (3개월 수익률 최고 {hedge_pct})"
+
+    # ── 특별 알림 ──
     bullish_suffix = "  🔥 강세장" if is_bull else ""
     special_alert  = ""
     if is_panic:
@@ -859,17 +818,18 @@ def main():
     elif decision_score >= 13:
         special_alert = ("\n\n🚨 💀 [긴급 대피 시그널] 매크로 경제 붕괴 확정!\n"
                          "▶ 모든 자산을 현금화하고 관망하십시오.")
-    elif LEV["phase"] == "B" and LEV["weight"] > 0:
-        special_alert = ("\n\n🚀 🚨 [LEV 바닥 신호 발동!]\n"
-                         f"▶ 3중 조건 충족! LEV {LEV['weight']:.0f}% 집중 투입 타이밍입니다.")
+    elif lev["phase"] == "B" and lev["weight"] > 0:
+        special_alert = ("\n\n🚀 🚨 [레버리지 바닥 신호 발동!]\n"
+                         f"▶ 3중 조건 충족! 레버리지 ETF {lev['weight']:.0f}% 집중 투입 타이밍입니다.")
     elif is_recovering:
         special_alert = ("\n\n🚀 🚨 [특별 시그널] V자 폭발적 반등 포착!\n"
-                         "▶ 하락장 종료 확정! 대피 현금을 LEV에 집중 투입하십시오.")
+                         "▶ 하락장 종료 확정! 대피 현금을 레버리지 ETF에 집중 투입하십시오.")
     elif decision_score == 0 and spy_dd is not None and spy_dd >= 0:
         special_alert = ("\n\n🌈 ✨ [골디락스 시그널] 완벽한 대세 상승장 진입!\n"
-                         "▶ 리스크 제로 구간. LEV의 복리 폭발력을 편안하게 누리십시오.")
+                         "▶ 리스크 제로 구간. 레버리지 ETF의 복리 폭발력을 편안하게 누리십시오.")
     special_alert += whipsaw_alert
 
+    # ── 지표 포맷 ──
     fx_2y_gap = gap(fx_data[0], fx_data[3])
     fx_1y_gap = gap(fx_data[0], fx_data[2])
     if fx_2y_gap > FX_GAP["danger"]:    fx_status = "🚨 역사적 고점권"
@@ -884,79 +844,91 @@ def main():
                    if dxy_mom else "")
     hy_eval = (f"{hy_spread[0]:.2f}% ({'위험' if hy_spread[0]>HY_SPREAD_DANGER else '주의' if hy_spread[0]>HY_SPREAD_WARN else '안정'})"
                if hy_spread[0] else "지연")
-    extreme_fear_alert = (f"\n🔔 극단적 공포 감지 (F&G={fg_score})\n   → 역발상 분할매수 검토 구간\n"
+    extreme_fear_alert = (f"\n🔔 극단적 공포 감지 (F&G={fg_score}) → 역발상 분할매수 검토\n"
                           if is_extreme_fear else "")
 
-    msg_header = f"🤖 퀀텀 인사이트 v10.5  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    # ── 헤더 ──
+    msg_header = f"🤖 퀀텀 인사이트 v10.6  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
-        msg_header += f"\n\n✅ [업데이트 완료] ISM 지수가 {current_ism}로 갱신되었습니다!"
+        msg_header += f"\n✅ ISM 지수 {current_ism}로 갱신 완료!"
     elif days_since_update > 35:
-        msg_header += (f"\n\n🚨🚨 [경고] ISM 지수 갱신 필요! ({days_since_update}일 전)\n"
-                       f"채팅창에 'ISM 50.2' 형식으로 보내주세요! 🚨🚨")
+        msg_header += (f"\n🚨 ISM 지수 갱신 필요! ({days_since_update}일 전)\n"
+                       f"채팅창에 'ISM 50.2' 형식으로 보내주세요!")
 
     sys_status_msg = f"⚠️ 데이터 지연 ({', '.join(api_errors)})" if api_errors else "✅ 정상"
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
+    # ── S&P 지수 포맷 ──
+    def fmt_idx_compact(c, p, sma):
+        if c == 0: return "데이터 지연"
+        return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%  |  200일: {gap(c,sma):+.1f}%"
+
+    # ==========================================
+    # 📨 메시지 구성 (v10.6 새 레이아웃)
+    # ==========================================
     msg = f"""{msg_header}
 ━━━━━━━━━━━━━━━━━━
-🌍 거시 경제 국면 (매크로 내비게이션)
- ├ ISM 제조업: {current_ism} / 미국 실업률: {unrate}%
- ├ 현재 국면  : {regime_info['emoji']} {regime_info['name']}
- └ 시스템 보정: {regime_info['action']} (위험점수 {regime_info['score_adj']:+.1f}점 조절)
+🎯 오늘의 결론
+
+📊 위험 점수: {raw_score:.1f} / 15.0  ({diff_str})
+🚦 국면: {stage_label}
+
+🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%
+📢 매도 지침:
+ ├ 📈 지수/성장(QQQ, SPY): 【 {sell_idx} 】
+ └ 💰 배당/인컴(SCHD, JEPI): 【 {sell_div} 】
+
+📋 행동: {stage_action}{crisis_hedge_str}{special_alert}{format_lev_section(lev, ai.get('lev_signal','🟡 레버리지 주의'))}
 ━━━━━━━━━━━━━━━━━━
-📌 시장 국면
-{ai['market_phase']}{bullish_suffix}
+🤖 AI 종합 분석
+
+📌 시장 국면: {ai['market_phase']}{bullish_suffix}
 
 ⚠️ 핵심 리스크
 ① {ai['top_risks'][0]}
 ② {ai['top_risks'][1]}
 ③ {ai['top_risks'][2]}
 
-💡 기회 요인 (미래 산업 진단)
-{ai['opportunity']}
-
 🧙‍♂️ 거장 시그널
 {ai['guru_insight']}
 
 🧭 대응 전략
 {ai['strategy']}
+
+💡 기회 요인
+{ai['opportunity']}
 {extreme_fear_alert}
-🧭 추가 시장 진단
- ├ 시장 폭(Breadth): {breadth_status}
- └ 위기 시 최적 대피처: {best_hedge_display}
+💡 AI 심층 분석
+{ai['macro_correlation']}
 ━━━━━━━━━━━━━━━━━━
-📊 위험 점수: {raw_score:.1f} / 15.0 ({diff_str}){trend_section}
-🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%
-📢 매도 지침 (현재 수량 기준):
- ├ 📈 지수/성장(QQQ, SPY): 【 {sell_idx} 】
- └ 💰 배당/인컴(SCHD, JEPI): 【 {sell_div} 】
+📈 시장 지수
 
-🚦 국면: {stage_label}
-📋 행동: {stage_action}{special_alert}{format_LEV_section(LEV)}
-━━━━━━━━━━━━━━━━━━
-📈 주요 지표
-
-S&P 500  : {format_index(*spy_raw)}
+S&P 500: {fmt_idx_compact(*spy_raw)}
  └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
-NASDAQ   : {format_index(*qqq_raw)}
-KOSPI    : {format_index(*kospi_raw)}
-RSI(S&P) : {get_rsi_label(rsi)}
+NASDAQ : {fmt_idx_compact(*qqq_raw)}
+KOSPI  : {fmt_idx_compact(*kospi_raw)}
+RSI(S&P): {get_rsi_label(rsi)}
+시장 폭 : {breadth_status}
+━━━━━━━━━━━━━━━━━━
+🌍 매크로 환경
+
+ ├ ISM 제조업: {current_ism}  /  실업률: {unrate}%
+ ├ 국면: {regime_info['emoji']} {regime_info['name']}
+ └ 보정: {regime_info['action']} ({regime_info['score_adj']:+.1f}점){trend_section}
+━━━━━━━━━━━━━━━━━━
+🌐 매크로 지표
+
+😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score is not None else "지연"}
+📊 VIX      : {f"{vix:.2f}" if vix is not None else "지연"}  {vix_eval_str}
+📉 HY스프레드: {hy_eval}
+💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
+🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}
+🥇 금        : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
 
 💵 환율 (USD/KRW)
 {fx_data[0]:,.0f}원  {fx_status}
  ├ 1년 평균: {fx_data[2]:,.0f}원  ({gap(fx_data[0],fx_data[2]):+.1f}%)
  └ 2년 평균: {fx_data[3]:,.0f}원  ({fx_2y_gap:+.1f}%)
-
-😨 공포탐욕  : {f"{fg_score}  {fg_label}" if fg_score is not None else "지연"}
-📊 VIX      : {f"{vix:.2f}" if vix is not None else "지연"}  {vix_eval_str}
-💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
-🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}
-📉 HY스프레드: {hy_eval}
-🥇 금        : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
-━━━━━━━━━━━━━━━━━━
-💡 매크로 지표 심층 분석 (AI)
-🎰 레버리지 진단: {ai.get('LEV_signal', '🟡 레버리지 주의')}
-{ai['macro_correlation']}
 ━━━━━━━━━━━━━━━━━━
 🛠 시스템: {sys_status_msg}
 """
@@ -996,8 +968,8 @@ RSI(S&P) : {get_rsi_label(rsi)}
         "fg_score":         fg_score,
         "updated":          datetime.now().strftime("%Y-%m-%d %H:%M"),
         "daily_log":        daily_log[-365:],
-        "LEV_vix_peak":    state.get("LEV_vix_peak", 0.0),
-        "LEV_crisis_days": state.get("LEV_crisis_days", 0),
+        "lev_vix_peak":     state.get("lev_vix_peak", 0.0),
+        "lev_crisis_days":  state.get("lev_crisis_days", 0),
     }
 
     save_state(new_state_data, existing_history=history,
@@ -1006,8 +978,8 @@ RSI(S&P) : {get_rsi_label(rsi)}
                hy_spread=hy_spread[0] if hy_spread else None,
                us10y=us10y[0] if us10y else None, fx=fx_data[0])
 
-    log(f"✅ v10.5 완료 | 국면={regime_info['name']} | "
-        f"점수={raw_score:.1f} | LEV={LEV['weight']:.1f}% (Phase {LEV['phase']})")
+    log(f"✅ v10.6 완료 | 국면={regime_info['name']} | "
+        f"점수={raw_score:.1f} | LEV={lev['weight']:.1f}% (Phase {lev['phase']})")
 
 if __name__ == "__main__":
     main()
