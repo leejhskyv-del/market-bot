@@ -728,13 +728,15 @@ def main():
         log("☀️ 일요일 — 시장 휴장, 메시지 없음")
         return
 
-    # 토요일: 주간 요약만 전송 (정규 메시지는 이미 금요일 미장 후 발송됨)
-    if weekday == 5:
-        log("📅 토요일 — 주간 요약 모드")
+    # 토요일 5시(KST): 주간 요약만 전송
+    if weekday == 5 and datetime.now().hour >= 5:
+        log("📅 토요일 5시 — 주간 요약 모드")
         state   = load_state()
         history = state.get("history", [])
         send_weekly_summary(state, history)
         return
+
+    # 토요일 4시(KST) + 평일: 정규 메시지
 
     state          = load_state()
     prev_score     = state.get("score", 0.0)
@@ -991,7 +993,7 @@ def main():
         return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%  |  200일: {gap(c,sma):+.1f}%"
 
     # ==========================================
-    # 📨 메시지 구성 (v10.7 새 레이아웃)
+    # 📨 메시지 구성 (v10.6 새 레이아웃)
     # ==========================================
     msg = f"""{msg_header}
 ━━━━━━━━━━━━━━━━━━
