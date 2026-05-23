@@ -456,7 +456,7 @@ def format_lev_section(lev, lev_signal):
 
     return f"""
 ━━━━━━━━━━━━━━━━━━
-🚀 레버리지 ETF 주간 매수 신호 [v10.6]
+🚀 레버리지 ETF 주간 매수 신호
 
 {buy_signal}
 📋 {buy_action}
@@ -592,8 +592,8 @@ def calc_trend(history):
     avg7  = avg(scores[-7:])
     avg30 = avg(scores[-30:])
     avg90 = avg(scores[-90:])
-    trend = ("📈 개선 중" if avg7 and avg30 and avg7 < avg30
-             else "📉 악화 중" if avg7 and avg30 and avg7 > avg30+1.5
+    trend = ("📉 개선 중" if avg7 and avg30 and avg7 < avg30
+             else "📈 악화 중" if avg7 and avg30 and avg7 > avg30+1.5
              else "➖ 횡보")
     max_score = max(scores[-90:]) if scores else None
     min_score = min(scores[-90:]) if scores else None
@@ -604,10 +604,137 @@ def calc_trend(history):
             "min_score":min_score,"min_date":min_date}
 
 # ==========================================
+# 📅 주간 요약 (토요일 전용)
+# ==========================================
+def send_weekly_summary(state, history):
+    """
+    토요일: 이번 주 (월~금) 데이터 요약 전송
+    Gist history에서 최근 5거래일 데이터 사용
+    """
+    today     = datetime.now()
+    week_data = []
+
+    # history에서 이번 주 월~금 데이터 추출 (최근 5거래일)
+    recent = sorted(history, key=lambda h: h.get("date",""), reverse=True)
+    for h in recent[:5]:
+        try:
+            d = datetime.strptime(h["date"], "%Y-%m-%d")
+            if d.weekday() < 5:  # 평일만
+                week_data.append(h)
+        except: pass
+    week_data = sorted(week_data, key=lambda h: h.get("date",""))
+
+    if not week_data:
+        log("⚠️ 주간 요약: 이번 주 데이터 없음")
+        return
+
+    # 점수 추이
+    scores     = [h.get("score", 0) for h in week_data]
+    avg_score  = round(sum(scores)/len(scores), 1) if scores else 0
+    score_dir  = "📈 개선" if scores[-1] < scores[0] else "📉 악화" if scores[-1] > scores[0] else "➖ 유지"
+
+    # 요일별 점수 행
+    day_names  = ["월","화","수","목","금","토","일"]
+    score_rows = ""
+    for h in week_data:
+        try:
+            d    = datetime.strptime(h["date"], "%Y-%m-%d")
+            day  = day_names[d.weekday()]
+            sc   = h.get("score", "-")
+            stage= h.get("stage", "")
+            emoji= "🟢" if sc < 3 else "🔵" if sc < 7 else "🟡" if sc < 11 else "🟠" if sc < 13 else "🔴"
+            score_rows += f" │ {day} {d.strftime('%m/%d')} {emoji} {sc:.1f}점  {stage}\n"
+        except: pass
+
+    # 주간 시장 성과 (spy_pct 합산 근사)
+    spy_weekly = sum(h.get("spy_pct", 0) or 0 for h in week_data)
+    spy_icon   = "▲" if spy_weekly > 0 else "▼"
+
+    # VIX 범위
+    vix_vals   = [h.get("vix") for h in week_data if h.get("vix")]
+    vix_str    = f"{min(vix_vals):.1f}~{max(vix_vals):.1f}" if vix_vals else "지연"
+
+    # 현재 상태
+    last_score  = state.get("score", 0)
+    last_stage  = state.get("stage", "")
+    lev_signal  = "확인 필요"
+
+    # 다음 주 월요일 날짜
+    next_mon = today + timedelta(days=(7 - today.weekday()))
+    next_mon_str = next_mon.strftime("%m월 %d일 (월)")
+
+    msg = f"""🤖 퀀텀 인사이트 v10.7  |  주간 요약
+{today.strftime('%Y.%m.%d')} 토요일
+━━━━━━━━━━━━━━━━━━
+📅 이번 주 위험 점수 (월~금)
+
+{score_rows} └ 주간 평균: {avg_score}점  {score_dir}
+━━━━━━━━━━━━━━━━━━
+📈 주간 시장 동향
+
+S&P 500 주간: {spy_icon}{abs(spy_weekly):.1f}%  누적
+VIX 범위     : {vix_str}
+━━━━━━━━━━━━━━━━━━
+🎯 현재 포지션 요약
+
+📊 마지막 위험 점수: {last_score:.1f}점
+🚦 국면: {last_stage}
+━━━━━━━━━━━━━━━━━━
+📋 주말 행동 지침
+
+ ├ 지수/ETF 추가 매수: 평일 장 중에만
+ ├ 포트폴리오 점검: 현재 국면 유지
+ └ 다음 신호: {next_mon_str} 오전
+━━━━━━━━━━━━━━━━━━
+🛠 시스템: ✅ 주말 모드 (시장 휴장)
+"""
+
+    def split_message(text, max_len=3900):
+        parts = []
+        while len(text) > max_len:
+            split_at = text.rfind('\n', 0, max_len)
+            if split_at == -1: split_at = max_len
+            parts.append(text[:split_at])
+            text = text[split_at:].lstrip()
+        if text: parts.append(text)
+        return parts
+
+    for chunk in split_message(msg):
+        for _ in range(3):
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{ENV['TELEGRAM_TOKEN']}/sendMessage",
+                    data={"chat_id": ENV["CHAT_ID"], "text": chunk}, timeout=15
+                ).raise_for_status()
+                break
+            except: time.sleep(2)
+        else:
+            log("❌ 주간 요약 텔레그램 전송 실패")
+
+    log("✅ 주간 요약 전송 완료")
+
+
+# ==========================================
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v10.6 가동")
+    log("📊 퀀텀 하이브리드 v10.7 가동")
+
+    # ── 요일 체크 ──
+    weekday = datetime.now().weekday()  # 0=월 ~ 6=일
+
+    # 일요일: 완전 스킵
+    if weekday == 6:
+        log("☀️ 일요일 — 시장 휴장, 메시지 없음")
+        return
+
+    # 토요일: 주간 요약만 전송 (정규 메시지는 이미 금요일 미장 후 발송됨)
+    if weekday == 5:
+        log("📅 토요일 — 주간 요약 모드")
+        state   = load_state()
+        history = state.get("history", [])
+        send_weekly_summary(state, history)
+        return
 
     state          = load_state()
     prev_score     = state.get("score", 0.0)
@@ -848,7 +975,7 @@ def main():
                           if is_extreme_fear else "")
 
     # ── 헤더 ──
-    msg_header = f"🤖 퀀텀 인사이트 v10.6  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v10.7  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
         msg_header += f"\n✅ ISM 지수 {current_ism}로 갱신 완료!"
     elif days_since_update > 35:
@@ -859,12 +986,12 @@ def main():
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
     # ── S&P 지수 포맷 ──
-    def fmt_idx_compact(c, p, sma, _=None):
+    def fmt_idx_compact(c, p, sma):
         if c == 0: return "데이터 지연"
         return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%  |  200일: {gap(c,sma):+.1f}%"
 
     # ==========================================
-    # 📨 메시지 구성 (v10.6 새 레이아웃)
+    # 📨 메시지 구성 (v10.7 새 레이아웃)
     # ==========================================
     msg = f"""{msg_header}
 ━━━━━━━━━━━━━━━━━━
@@ -903,10 +1030,10 @@ def main():
 ━━━━━━━━━━━━━━━━━━
 📈 시장 지수
 
-S&P 500: {fmt_idx_compact(spy_raw[0], spy_raw[1], spy_raw[2])}
+S&P 500: {fmt_idx_compact(*spy_raw)}
  └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
-NASDAQ : {fmt_idx_compact(qqq_raw[0], qqq_raw[1], qqq_raw[2])}
-KOSPI  : {fmt_idx_compact(kospi_raw[0], kospi_raw[1], kospi_raw[2])}
+NASDAQ : {fmt_idx_compact(*qqq_raw)}
+KOSPI  : {fmt_idx_compact(*kospi_raw)}
 RSI(S&P): {get_rsi_label(rsi)}
 시장 폭 : {breadth_status}
 ━━━━━━━━━━━━━━━━━━
@@ -978,7 +1105,7 @@ RSI(S&P): {get_rsi_label(rsi)}
                hy_spread=hy_spread[0] if hy_spread else None,
                us10y=us10y[0] if us10y else None, fx=fx_data[0])
 
-    log(f"✅ v10.6 완료 | 국면={regime_info['name']} | "
+    log(f"✅ v10.7 완료 | 국면={regime_info['name']} | "
         f"점수={raw_score:.1f} | LEV={lev['weight']:.1f}% (Phase {lev['phase']})")
 
 if __name__ == "__main__":
