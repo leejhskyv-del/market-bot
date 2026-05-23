@@ -729,7 +729,7 @@ def main():
         return
 
     # 토요일 5시(KST): 주간 요약만 전송
-    if weekday == 5 and datetime.now().hour >= 5:
+    if weekday == 5 and 5 <= datetime.now().hour < 7:
         log("📅 토요일 5시 — 주간 요약 모드")
         state   = load_state()
         history = state.get("history", [])
