@@ -988,7 +988,7 @@ def main():
     if is_panic: sys_status_msg = f"🚨 패닉 감지 | {sys_status_msg}"
 
     # ── S&P 지수 포맷 ──
-    def fmt_idx_compact(c, p, sma):
+    def fmt_idx_compact(c, p, sma, _=None):
         if c == 0: return "데이터 지연"
         return f"{c:,.0f}  {arrow(pct(c,p))}{abs(pct(c,p)):.1f}%  |  200일: {gap(c,sma):+.1f}%"
 
