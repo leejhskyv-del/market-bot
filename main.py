@@ -492,7 +492,7 @@ def get_ai_analysis(news: str, market_summary: dict) -> dict:
 4. [미래 전략산업] 매크로 환경이 우주/로봇/양자에 우호적인지 'opportunity'에 1~2문장 진단.
 5. [거장 시그널] 뉴스에 버핏/드러켄밀러/하워드막스/레이달리오 발언이 있으면
    'guru_insight'에 반드시 [이름]: "핵심 발언 요약" 형식으로 작성.
-   없으면 "이번 주 거장 발언 없음"으로 명시.
+   없으면 "오늘 거장 발언 없음"으로 명시.
    'guru_score': 부정적이면 +0.5, 긍정적이면 -0.5, 없으면 0.0.
 6. [레버리지 진단] 현재 매크로 환경이 레버리지 ETF(TQQQ, SOXL 등)에 우호적인지 'lev_signal'에 한 줄 판단.
    - 우호적: 골디락스 + 저변동성 → "🟢 레버리지 우호"
@@ -737,6 +737,11 @@ def main():
         state   = load_state()
         history = state.get("history", [])
         send_weekly_summary(state, history)
+        return
+
+    # 추가: 평일 5시 실행 스킵 (4시에 이미 발송됨)
+    if weekday != 5 and datetime.now().hour >= 5:
+        log("⏰ 4시 이후 중복 실행 — 스킵")
         return
 
     # 토요일 4시(KST) + 평일: 정규 메시지
