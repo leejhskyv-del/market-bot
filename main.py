@@ -483,7 +483,9 @@ def extract_news_keywords(entries, max_items=8):
     return "\n".join((critical+normal)[:max_items])
 
 def get_ai_analysis(news: str, market_summary: dict) -> dict:
-    prompt = f"""당신은 월스트리트 최고 수준의 퀀트 매크로 전략가이며, 현재 '매일 기계적으로 지수(VOO, QQQ)를 모아가며, 포트폴리오의 일부를 미래 전략산업(QTUM, UFO, NASA, ARKQ 등)과 레버리지 ETF(TQQQ 등)에 위성 투자(Satellite)하는 투자자'를 전담 보좌하는 수석 비서입니다.
+    prompt = f"""당신은 한국어로만 응답합니다. 영어 뉴스가 입력되어도 반드시 한국어로 번역하여 출력하세요. 
+    
+    당신은 월스트리트 최고 수준의 퀀트 매크로 전략가이며, 현재 '매일 기계적으로 지수(VOO, QQQ)를 모아가며, 포트폴리오의 일부를 미래 전략산업(QTUM, UFO, NASA, ARKQ 등)과 레버리지 ETF(TQQQ 등)에 위성 투자(Satellite)하는 투자자'를 전담 보좌하는 수석 비서입니다.
 
 [분석 원칙]
 1. [매크로 최우선] 뉴스 중 '🚨[핵심 매크로]' 연준, 금리 데이터에 집중하여 시장의 흐름 진단.
