@@ -725,7 +725,7 @@ VIX 범위     : {vix_str}
 def main():
     log("📊 퀀텀 하이브리드 v10.7 가동")
 
-    TEST_MODE = True   # ← 테스트할 때 True, 평소엔 False
+    TEST_MODE = False   # ← 테스트할 때 True, 평소엔 False
 
     weekday = datetime.now().weekday()  # 0=월 ~ 6=일
     hour    = datetime.now().hour       # KST 기준
