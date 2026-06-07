@@ -725,32 +725,31 @@ VIX 범위     : {vix_str}
 def main():
     log("📊 퀀텀 하이브리드 v10.7 가동")
 
+    TEST_MODE = True   # ← 테스트할 때 True, 평소엔 False
+
     weekday = datetime.now().weekday()  # 0=월 ~ 6=일
     hour    = datetime.now().hour       # KST 기준
 
-    # 일요일: 완전 스킵
-    if weekday == 6:
-        log("☀️ 일요일 — 메시지 없음")
-        return
-
-    # 토요일 5시: 주간 요약
-    if weekday == 5 and 5 <= hour < 7:
-        log("📅 토요일 5시 — 주간 요약 모드")
-        state   = load_state()
-        history = state.get("history", [])
-        send_weekly_summary(state, history)
-        return
-
-    # 토요일 22시: 스킵
-    if weekday == 5 and hour >= 20:
-        log("🌙 토요일 22시 — 메시지 없음")
-        return
-
-    # 평일/토요일 중 허용 시간대 아니면 스킵
-    # 허용: 04시(3~5시), 22시(21~23시)
-    if not (3 <= hour < 5 or 21 <= hour < 24):
-        log("⏰ 허용 시간대 아님 — 스킵")
-        return
+    if not TEST_MODE:
+        # 일요일: 완전 스킵
+        if weekday == 6:
+            log("☀️ 일요일 — 메시지 없음")
+            return
+        # 토요일 5시: 주간 요약
+        if weekday == 5 and 5 <= hour < 7:
+            log("📅 토요일 5시 — 주간 요약 모드")
+            state   = load_state()
+            history = state.get("history", [])
+            send_weekly_summary(state, history)
+            return
+        # 토요일 22시: 스킵
+        if weekday == 5 and hour >= 20:
+            log("🌙 토요일 22시 — 메시지 없음")
+            return
+        # 허용 시간대 체크
+        if not (3 <= hour < 5 or 21 <= hour < 24):
+            log("⏰ 허용 시간대 아님 — 스킵")
+            return
 
     # 정규 메시지 실행
     state          = load_state()
