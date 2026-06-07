@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def log(msg): logging.info(msg)
 
 UNRATE_THRESHOLD = 4.2
-VIX              = {"warn": 25, "danger": 35, "panic": 45}
+VIX              = {"warn": 20, "danger": 30, "panic": 40}
 FX_GAP           = {"caution": 4, "danger": 8}
 DXY              = {"warn": 122, "danger": 126}
 SPY_PANIC_DROP   = -4.0
@@ -555,7 +555,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
         if vix_trend >= 10 and vix >= VIX["warn"]: s += 1.0
         elif vix_trend <= -10: s -= 0.5
         if vix >= VIX["panic"]:  s += 4.0
-        elif vix >= 30:          s += 1.5
+        elif vix >= VIX["danger"]:  s += 1.5
         elif vix >= VIX["warn"]: s += 1.0
     if dxy > DXY["danger"]: s += 1.5
     elif dxy > DXY["warn"]: s += 0.5
