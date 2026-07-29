@@ -795,6 +795,8 @@ def main():
 
     qqq_raw   = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")
     if not qqq_raw: qqq_raw=(0,0,0,0); api_errors.append("QQQ")
+    # 나스닥 고점 대비 낙폭(Drawdown) 계산 추가
+    qqq_dd = ((qqq_raw[0]-qqq_raw[3])/qqq_raw[3]*100) if qqq_raw[0] and qqq_raw[3] else None    
     kospi_raw = safe(lambda: get_yahoo_stats("^KS11"), "KOSPI")
     if not kospi_raw: kospi_raw=(0,0,0,0); api_errors.append("KOSPI")
     fx_data   = safe(lambda: get_fx_data(), "FX")
@@ -878,6 +880,18 @@ def main():
                and gap(spy_raw[0],spy_raw[2])>3
                and gap(qqq_raw[0],qqq_raw[2])>3
                and vix is not None and vix<20)
+
+    # ── 섹터 로테이션 감지 로직 ──
+    market_status_text = "  🔥 장기 강세장 유지" if is_bull else ""
+    if spy_dd is not None and qqq_dd is not None:
+        if spy_dd > -5.0 and qqq_dd <= -10.0:
+            market_status_text += "\n  🚨 [섹터 로테이션] S&P 500은 건전한 조정 중이나, 나스닥(기술주) 중심의 자금 이탈 및 단기 급락 진행 중!"
+        elif spy_dd > -5.0 and qqq_dd <= -5.0:
+            market_status_text += "\n  ⚠️ [차별화 장세] 나스닥 단기 약세 진행 중"
+        elif qqq_dd > -5.0 and spy_dd <= -10.0:
+            market_status_text += "\n  ⚠️ [가치주 약세] 기술주는 버티나 전통 가치주/경기민감주 중심의 하락 진행 중"
+
+    bullish_suffix = market_status_text
 
     total_score = calc_risk_score(
         spy_raw, qqq_raw, kospi_raw, fx_data, vix, vix_trend,
@@ -1049,6 +1063,8 @@ def main():
 S&P 500: {fmt_idx_compact(*spy_raw)}
  └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
 NASDAQ : {fmt_idx_compact(*qqq_raw)}
+ └ 52주 고점 대비: {get_drawdown_label(qqq_dd)}
+KOSPI  : {fmt_idx_compact(*kospi_raw)}
 KOSPI  : {fmt_idx_compact(*kospi_raw)}
 RSI(S&P): {get_rsi_label(rsi)}
 시장 폭 : {breadth_status}
