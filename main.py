@@ -50,16 +50,19 @@ RETRY_COUNT = 4
 RETRY_DELAY = 15
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
+# 🆕 엔캐리, BOJ 관련 키워드 추가
 ECON_KEYWORDS = [
     "Fed", "rate", "inflation", "recession", "GDP", "jobs", "unemployment",
     "tariff", "trade", "bank", "earnings", "default", "yield", "debt",
     "cut", "hike", "pivot", "crash", "rally", "금리", "인플레", "관세", "실업",
+    "Yen", "BOJ", "carry trade", "엔캐리", "일본은행",
     "Buffett", "버핏", "Berkshire", "버크셔",
     "Druckenmiller", "드러켄밀러", "Howard Marks", "하워드 막스", "Ray Dalio", "레이 달리오"
 ]
 MACRO_CRITICAL = [
     "fed", "fomc", "powell", "cpi", "pce", "rate cut", "rate hike",
     "연준", "파월", "금리", "인플레이션", "물가",
+    "Yen", "BOJ", "엔캐리", "일본은행",
     "buffett", "버핏", "druckenmiller", "드러켄밀러", "howard marks", "하워드 막스", "ray dalio", "레이 달리오"
 ]
 NEWS_FEEDS = [
@@ -67,7 +70,7 @@ NEWS_FEEDS = [
     ("CNBC 경제",      "https://www.cnbc.com/id/20910258/device/rss/rss.html"),
     ("CNBC 전체",      "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
     ("MarketWatch",    "https://feeds.marketwatch.com/marketwatch/topstories/"),
-    ("WSJ 마켓",       "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"),
+    ("WSJ 마켓",        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"),
 ]
 
 # ==========================================
@@ -410,18 +413,12 @@ def calc_lev_unified(decision_score, ism, vix, spy_closes, vix_closes,
             "reason":f"골디락스 진입 (VIX:{vix:.1f}, ISM:{ism:.1f})",
             "bottom_detail":bottom_detail,"state":state}
 
-
 def format_lev_section(lev, lev_signal):
-    """
-    v10.6 레이아웃:
-    매수신호 → 행동 → Phase + 바닥감지(데이터 있을 때만) → AI레버리지진단
-    """
     w     = lev["weight"]
     phase = lev["phase"]
     vix_peak    = lev["state"].get("lev_vix_peak", 0.0)
     crisis_days = lev["state"].get("lev_crisis_days", 0)
 
-    # ── 매수 신호 결정 ──
     if phase in ("A", "차단") or w == 0.0:
         if phase == "A" or lev["phase_name"] in ("🔴 위기차단", "🔴 ISM차단"):
             buy_signal = "🔴 매수 완전 중단"
@@ -446,7 +443,6 @@ def format_lev_section(lev, lev_signal):
             buy_signal = "⚪ 이번 주 매수 보류"
             buy_action = "골디락스 범위 경계선 → 다음 주 재확인"
 
-    # ── Phase 줄 (바닥감지 데이터 있을 때만 두 줄, 없으면 한 줄) ──
     has_bottom_data = vix_peak > 0 or crisis_days > 0
     if has_bottom_data:
         phase_line = (f" ├ Phase: {lev['phase_name']}\n"
@@ -612,19 +608,14 @@ def calc_trend(history):
 # 📅 주간 요약 (토요일 전용)
 # ==========================================
 def send_weekly_summary(state, history):
-    """
-    토요일: 이번 주 (월~금) 데이터 요약 전송
-    Gist history에서 최근 5거래일 데이터 사용
-    """
     today     = datetime.now()
     week_data = []
 
-    # history에서 이번 주 월~금 데이터 추출 (최근 5거래일)
     recent = sorted(history, key=lambda h: h.get("date",""), reverse=True)
     for h in recent[:5]:
         try:
             d = datetime.strptime(h["date"], "%Y-%m-%d")
-            if d.weekday() < 5:  # 평일만
+            if d.weekday() < 5: 
                 week_data.append(h)
         except: pass
     week_data = sorted(week_data, key=lambda h: h.get("date",""))
@@ -633,12 +624,10 @@ def send_weekly_summary(state, history):
         log("⚠️ 주간 요약: 이번 주 데이터 없음")
         return
 
-    # 점수 추이
     scores     = [h.get("score", 0) for h in week_data]
     avg_score  = round(sum(scores)/len(scores), 1) if scores else 0
     score_dir  = "📈 개선" if scores[-1] < scores[0] else "📉 악화" if scores[-1] > scores[0] else "➖ 유지"
 
-    # 요일별 점수 행
     day_names  = ["월","화","수","목","금","토","일"]
     score_rows = ""
     for h in week_data:
@@ -651,20 +640,15 @@ def send_weekly_summary(state, history):
             score_rows += f" │ {day} {d.strftime('%m/%d')} {emoji} {sc:.1f}점  {stage}\n"
         except: pass
 
-    # 주간 시장 성과 (spy_pct 합산 근사)
     spy_weekly = sum(h.get("spy_pct", 0) or 0 for h in week_data)
     spy_icon   = "▲" if spy_weekly > 0 else "▼"
 
-    # VIX 범위
     vix_vals   = [h.get("vix") for h in week_data if h.get("vix")]
     vix_str    = f"{min(vix_vals):.1f}~{max(vix_vals):.1f}" if vix_vals else "지연"
 
-    # 현재 상태
     last_score  = state.get("score", 0)
     last_stage  = state.get("stage", "")
-    lev_signal  = "확인 필요"
-
-    # 다음 주 월요일 날짜
+    
     next_mon = today + timedelta(days=(7 - today.weekday()))
     next_mon_str = next_mon.strftime("%m월 %d일 (월)")
 
@@ -693,7 +677,6 @@ VIX 범위     : {vix_str}
 ━━━━━━━━━━━━━━━━━━
 🛠 시스템: ✅ 주말 모드 (시장 휴장)
 """
-
     def split_message(text, max_len=3900):
         parts = []
         while len(text) > max_len:
@@ -731,27 +714,22 @@ def main():
     hour    = datetime.now().hour       # KST 기준
 
     if not TEST_MODE:
-        # 일요일: 완전 스킵
         if weekday == 6:
             log("☀️ 일요일 — 메시지 없음")
             return
-        # 토요일 5시: 주간 요약
         if weekday == 5 and 5 <= hour < 7:
             log("📅 토요일 5시 — 주간 요약 모드")
             state   = load_state()
             history = state.get("history", [])
             send_weekly_summary(state, history)
             return
-        # 토요일 22시: 스킵
         if weekday == 5 and hour >= 20:
             log("🌙 토요일 22시 — 메시지 없음")
             return
-        # 허용 시간대 체크
         if not (3 <= hour < 5 or 21 <= hour < 24):
             log("⏰ 허용 시간대 아님 — 스킵")
             return
 
-    # 정규 메시지 실행
     state          = load_state()
     prev_score     = state.get("score", 0.0)
     current_ism    = state.get("ism_pmi", 50.0)
@@ -795,12 +773,21 @@ def main():
 
     qqq_raw   = safe(lambda: get_yahoo_stats("^IXIC"), "QQQ")
     if not qqq_raw: qqq_raw=(0,0,0,0); api_errors.append("QQQ")
-    # 나스닥 고점 대비 낙폭(Drawdown) 계산 추가
     qqq_dd = ((qqq_raw[0]-qqq_raw[3])/qqq_raw[3]*100) if qqq_raw[0] and qqq_raw[3] else None    
+    
     kospi_raw = safe(lambda: get_yahoo_stats("^KS11"), "KOSPI")
     if not kospi_raw: kospi_raw=(0,0,0,0); api_errors.append("KOSPI")
+    
     fx_data   = safe(lambda: get_fx_data(), "FX")
     if not fx_data: fx_data=(1400.0,1400.0,1400.0,1400.0); api_errors.append("FX")
+    
+    # 🆕 엔달러(USD/JPY) 데이터 수집
+    jpy_closes = safe(lambda: get_yahoo_closes("JPY=X", "1mo"), "JPY")
+    jpy_now = jpy_closes[-1] if jpy_closes else 150.0
+    jpy_prev = jpy_closes[-2] if jpy_closes and len(jpy_closes)>1 else 150.0
+    jpy_drop_pct = pct(jpy_now, jpy_prev) if jpy_now and jpy_prev else 0.0
+    if not jpy_closes: api_errors.append("JPY")
+
     gold      = safe(lambda: get_gold_data(), "GOLD")
     if not gold: api_errors.append("GOLD")
     us10y     = safe(lambda: get_us10y(), "10Y")
@@ -848,7 +835,6 @@ def main():
         if recent_scores[-1]-recent_scores[0] >= 2.0:
             recent_score_jump = True
 
-    # 90일 추이 섹션
     trend_section = ""
     if trend:
         trend_section = (f"\n📊 위험 점수 추이 (90일)\n"
@@ -881,7 +867,6 @@ def main():
                and gap(qqq_raw[0],qqq_raw[2])>3
                and vix is not None and vix<20)
 
-    # ── 섹터 로테이션 감지 로직 ──
     market_status_text = "  🔥 장기 강세장 유지" if is_bull else ""
     if spy_dd is not None and qqq_dd is not None:
         if spy_dd > -5.0 and qqq_dd <= -10.0:
@@ -903,6 +888,21 @@ def main():
                        (spy_raw[0]>0 and pct(spy_raw[0],spy_raw[1]) <= SPY_PANIC_DROP))
     is_extreme_fear = fg_score is not None and fg_score < FG_EXTREME_FEAR
     raw_score  = total_score
+
+    # 🆕 엔캐리 청산 발작 감지 (임계값 강화 버전)
+    jpy_alert = ""
+    if jpy_drop_pct <= -1.5:  # 클로드 제안 수용: 발작 기준을 -1.5%로 강화
+        raw_score += 1.5
+        jpy_alert = "🚨 엔캐리 발작 (일일 -1.5% 이상 폭락!)"
+    elif jpy_drop_pct <= -1.0:
+        raw_score += 0.5    # -1.0% 수준은 경고성으로 +0.5점만 부여
+        jpy_alert = "⚠️ 급격한 엔화 강세 (캐리 청산 경계)"
+    elif jpy_drop_pct <= -0.5:
+        jpy_alert = "🟡 엔화 강세 진행 중"
+    else:
+        jpy_alert = "✅ 안정적"
+        
+    raw_score = min(SCORE_MAX, raw_score) # 15점 만점 제한
     diff_str   = f"{(raw_score-prev_score):+.1f}"
 
     # ── 히스테리시스 + 추세 융합 엔진 ──
@@ -967,7 +967,6 @@ def main():
             crisis_hedge_str = f"\n └ 🚨 현금 대피처: {hedge_asset} 매수 권장 (3개월 수익률 최고 {hedge_pct})"
 
     # ── 특별 알림 ──
-    bullish_suffix = "  🔥 강세장" if is_bull else ""
     special_alert  = ""
     if is_panic:
         special_alert = ("\n\n🚨 ⚡ [블랙스완 감지] 일일 -4% 이상 폭락!\n"
@@ -1065,7 +1064,6 @@ S&P 500: {fmt_idx_compact(*spy_raw)}
 NASDAQ : {fmt_idx_compact(*qqq_raw)}
  └ 52주 고점 대비: {get_drawdown_label(qqq_dd)}
 KOSPI  : {fmt_idx_compact(*kospi_raw)}
-KOSPI  : {fmt_idx_compact(*kospi_raw)}
 RSI(S&P): {get_rsi_label(rsi)}
 시장 폭 : {breadth_status}
 ━━━━━━━━━━━━━━━━━━
@@ -1081,9 +1079,14 @@ RSI(S&P): {get_rsi_label(rsi)}
 📊 VIX      : {f"{vix:.2f}" if vix is not None else "지연"}  {vix_eval_str}
 📉 HY스프레드: {hy_eval}
 💲 달러인덱스: {dxy:.1f}  {dxy_status}{dxy_mom_str}
-🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"}
 🥇 금        : {f"{gold[0]:,.0f}  {get_gold_signal(gold)}" if gold else "지연"}
 
+🎯 글로벌 리스크 모니터
+🏦 미 10Y금리: {f"{us10y[0]:.2f}%" if us10y and us10y[0] else "지연"} {f"(전일대비 {us10y[0]-us10y[1]:+.2f}%p)" if us10y and us10y[0] and us10y[1] else ""}
+ └ 상태: {"🚨 금리 급등 발작!" if us10y and us10y[0] and us10y[1] and (us10y[0]-us10y[1]) > 0.15 else "✅ 안정적"}
+💴 엔/달러 (USD/JPY): {jpy_now:.2f}엔 ({jpy_drop_pct:+.2f}%)
+ └ 상태: {jpy_alert}
+━━━━━━━━━━━━━━━━━━
 💵 환율 (USD/KRW)
 {fx_data[0]:,.0f}원  {fx_status}
  ├ 1년 평균: {fx_data[2]:,.0f}원  ({gap(fx_data[0],fx_data[2]):+.1f}%)
