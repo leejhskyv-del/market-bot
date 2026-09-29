@@ -14,7 +14,7 @@ def log(msg): logging.info(msg)
 UNRATE_THRESHOLD = 4.2
 VIX              = {"warn": 20, "danger": 30, "panic": 40}
 FX_GAP           = {"caution": 4, "danger": 8}
-DXY              = {"warn": 105, "danger": 110}   # 🔧 v10.9: 122/126은 DXY 기준 사실상 도달 불가(2001년 이후 최고 ~114) → 현실화
+DXY              = {"warn": 105, "danger": 110}   # 🔧 v10.10: 122/126은 DXY 기준 사실상 도달 불가(2001년 이후 최고 ~114) → 현실화
 SPY_PANIC_DROP   = -4.0
 SPY_TREND_GAP    = 3.0
 SCORE_MAX        = 15.0
@@ -27,7 +27,7 @@ DRAWDOWN_DANGER  = -20.0
 AI_WEIGHT        = 0.5
 
 # ==========================================
-# 📐 금리 변동성 모듈 — v10.9: 표시 전용
+# 📐 금리 변동성 모듈 — v10.10: 표시 전용
 #   백테스트(1991~2026) 결과 점수·레버리지 차단에 넣으면 성과 악화 → 경보 표시만
 # ==========================================
 MOVE                 = {"warn": 120, "danger": 140}  # 채권 변동성 지수
@@ -37,7 +37,7 @@ RATE_EQ_SELLOFF_10Y  = 0.25   # 주식↓ + 금리↑ 동반 시 (금리발 조�
 LEV_MOVE_MAX         = 120    # 골디락스 레버리지 금리변동성 게이트
 
 # ==========================================
-# 🌡️ 과열 게이지 — v10.9: 표시 전용
+# 🌡️ 과열 게이지 — v10.10: 표시 전용
 #   백테스트: 200일선 +12%↑ 이후 12개월 평균 +13.6% (전체 평균 +10.1%) → 매도·감산 근거 없음
 # ==========================================
 SPX_EXT_HOT     = 12.0   # S&P 200일선 이격 %
@@ -46,7 +46,8 @@ FG_GREED_HOT    = 75
 HY_COMPLACENT   = 3.0    # HY 스프레드 과도한 안도
 OVERHEAT_ALERT  = 3      # 5개 중 3개 이상 → 과열 경보
 ISM_STALE_DAYS  = 45     # ISM 미갱신 시 골디락스 할인 중단
-SAHM_TRIGGER    = 0.5    # 🆕 v10.9: 고용 판정 (실업률 3개월평균 - 12개월 최저)
+CORE_HOLD_PCT   = 30     # 🆕 v10.10: 지수 영구보유 코어 비율 (%)
+SAHM_TRIGGER    = 0.5    # 🆕 v10.10: 고용 판정 (실업률 3개월평균 - 12개월 최저)
 
 # ==========================================
 # 🚀 LEV 통합 엔진 파라미터 (v10.5 백테스트 검증)
@@ -209,12 +210,12 @@ def get_fred_series(series_id, days=1000, min_count=1):
     return values
 
 def get_us10y_hist():
-    """🆕 v10.9: 20영업일 변동폭 산출용으로 히스토리 반환"""
+    """🆕 v10.10: 20영업일 변동폭 산출용으로 히스토리 반환"""
     return get_fred_series("DGS10", days=90, min_count=25)
 def get_hy_spread():
     v = get_fred_series("BAMLH0A0HYM2", days=60, min_count=5); return v[-1], v[-2]
 def get_unrate():
-    """🆕 v10.9: (최신 실업률, Sahm 지표) 반환"""
+    """🆕 v10.10: (최신 실업률, Sahm 지표) 반환"""
     v = get_fred_series("UNRATE", days=600, min_count=15)
     u3 = [sum(v[i-2:i+1])/3 for i in range(2, len(v))]
     sahm = u3[-1] - min(u3[-13:-1]) if len(u3) >= 13 else None
@@ -338,7 +339,7 @@ def get_gold_signal(gold):
     return "➖ 중립"
 
 # ==========================================
-# 🌡️ 과열 게이지 (v10.9)
+# 🌡️ 과열 게이지 (v10.10)
 # ==========================================
 def calc_overheat(spy_raw, rsi, fg_score, hy_now, breadth_status):
     sigs = []
@@ -355,7 +356,7 @@ def calc_overheat(spy_raw, rsi, fg_score, hy_now, breadth_status):
 # 🧭 매크로 국면 판독
 # ==========================================
 def get_macro_regime(ism, unrate, sahm=None):
-    # 🔧 v10.9: 실업률 절대값(4.2%)은 1991년 이후 22% 기간만 충족 → 추세(Sahm) 기준으로 고용 판정
+    # 🔧 v10.10: 실업률 절대값(4.2%)은 1991년 이후 22% 기간만 충족 → 추세(Sahm) 기준으로 고용 판정
     emp_ok = (sahm < SAHM_TRIGGER) if sahm is not None else (unrate <= UNRATE_THRESHOLD)
     unrate = UNRATE_THRESHOLD if emp_ok else UNRATE_THRESHOLD + 1
     if ism >= 50.0 and unrate <= UNRATE_THRESHOLD:
@@ -381,7 +382,7 @@ def _update_bottom_tracker(spy_closes, vix_closes, spy_dd, state):
     crisis_days = state.get("lev_crisis_days", 0)
     dd_min      = state.get("lev_dd_min", 0.0)
     today       = datetime.now().strftime("%Y-%m-%d")
-    new_day     = state.get("lev_last_day") != today   # 🔧 v10.9: 하루 2회 실행돼도 1일로만 카운트
+    new_day     = state.get("lev_last_day") != today   # 🔧 v10.10: 하루 2회 실행돼도 1일로만 카운트
     if spy_dd is not None and spy_dd <= -10.0:
         if new_day: crisis_days += 1
         if vix_now and vix_now > vix_peak: vix_peak = vix_now
@@ -399,7 +400,7 @@ def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
     vix_now     = vix_closes[-1]
     vix_peak    = state.get("lev_vix_peak", 0.0)
     crisis_days = state.get("lev_crisis_days", 0)
-    # 🔧 v10.9: 이번 하락 에피소드 중 최대낙폭 기준 (래치)
+    # 🔧 v10.10: 이번 하락 에피소드 중 최대낙폭 기준 (래치)
     #   기존: '현재 DD ≤ -20% & VIX ≤ 30' 동시 충족이 거의 불가 → 2020·2025 바닥 신호 미발동
     dd_min = min(state.get("lev_dd_min", 0.0), spy_dd if spy_dd is not None else 0.0)
     c1 = dd_min <= BOTTOM_DD_MIN
@@ -462,7 +463,7 @@ def calc_lev_unified(decision_score, ism, vix, spy_closes, vix_closes,
         return {"weight":0.0,"phase":"C","phase_name":"⚪ RSI차단",
                 "reason":f"RSI 과매도 ({rsi}) → 공황 구간, 안정 대기",
                 "bottom_detail":bottom_detail,"state":state}
-    # 🔧 v10.9: 금리 변동성 차단 제거 — 백테스트상 차단된 신호의 3개월 성과가 오히려 우수(+10.9% vs +4.4%)
+    # 🔧 v10.10: 금리 변동성 차단 제거 — 백테스트상 차단된 신호의 3개월 성과가 오히려 우수(+10.9% vs +4.4%)
 
     ratio  = (LEV_C_SCORE_TOP - decision_score) / LEV_C_SCORE_TOP
     weight = round(LEV_C_MAX * (ratio ** LEV_C_EXP) * 100, 1)
@@ -591,7 +592,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
                     us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering,
                     regime_adj, is_bull, breadth_status, recent_score_jump,
                     move=None, us10y_20d=None, spx_20d=None):
-    """🔧 v10.9: 경고(+)와 완화(-)를 분리 집계 → (최종점수, 경고합, 완화합) 반환"""
+    """🔧 v10.10: 경고(+)와 완화(-)를 분리 집계 → (최종점수, 경고합, 완화합) 반환"""
     warn, relief = 0.0, 0.0
     def add(v):
         nonlocal warn, relief
@@ -633,7 +634,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
     if us10y and us10y[0] and us10y[1]:
         if us10y[0]-us10y[1] > 0.15: add(1.5)
 
-    # 🔧 v10.9: 금리 변동성(MOVE·20일 변동폭)은 점수 미반영 — 백테스트상 수익 감소(특히 2022 반등 놓침), 표시만
+    # 🔧 v10.10: 금리 변동성(MOVE·20일 변동폭)은 점수 미반영 — 백테스트상 수익 감소(특히 2022 반등 놓침), 표시만
 
     if hy_spread and hy_spread[0]:
         hys = hy_spread[0]
@@ -651,7 +652,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
         if dxy is not None and dxy > DXY["warn"] and gold_gap > 5: add(1.5)
     if is_recovering:
         add(-1.6); log("✨ V자 회복 모멘텀 감지: -1.6 적용")
-    # 🔧 v10.9: 강세장 필터와 골디락스 할인 중복 방지 (둘 중 큰 할인 하나만)
+    # 🔧 v10.10: 강세장 필터와 골디락스 할인 중복 방지 (둘 중 큰 할인 하나만)
     bull_adj = -1.0 if is_bull else 0.0
     if regime_adj < 0:
         add(min(bull_adj, regime_adj))
@@ -737,7 +738,7 @@ def send_weekly_summary(state, history):
     next_mon = today + timedelta(days=(7 - today.weekday()))
     next_mon_str = next_mon.strftime("%m월 %d일 (월)")
 
-    msg = f"""🤖 퀀텀 인사이트 v10.9  |  주간 요약
+    msg = f"""🤖 퀀텀 인사이트 v10.10  |  주간 요약
 {today.strftime('%Y.%m.%d')} 토요일
 ━━━━━━━━━━━━━━━━━━
 📅 이번 주 위험 점수 (월~금)
@@ -792,7 +793,7 @@ VIX 범위     : {vix_str}
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v10.9 가동")
+    log("📊 퀀텀 하이브리드 v10.10 가동")
 
     TEST_MODE = False   # ← 테스트할 때 True, 평소엔 False
 
@@ -878,7 +879,7 @@ def main():
     gold      = safe(lambda: get_gold_data(), "GOLD")
     if not gold: api_errors.append("GOLD")
 
-    # 🆕 v10.9: 10Y 히스토리 → 전일/20일 변동폭
+    # 🆕 v10.10: 10Y 히스토리 → 전일/20일 변동폭
     us10y_hist = safe(lambda: get_us10y_hist(), "10Y")
     if us10y_hist:
         us10y     = (us10y_hist[-1], us10y_hist[-2])
@@ -886,7 +887,7 @@ def main():
     else:
         us10y = (None, None); us10y_20d = None; api_errors.append("10Y")
 
-    # 🆕 v10.9: MOVE (채권 변동성)
+    # 🆕 v10.10: MOVE (채권 변동성)
     move_closes = safe(lambda: get_yahoo_closes("^MOVE","3mo",min_count=10), "MOVE", retry=2, delay=5)
     move = move_closes[-1] if move_closes else None
     if move is None: api_errors.append("MOVE")
@@ -912,7 +913,7 @@ def main():
     if not vix_closes: api_errors.append("VIX")
 
     dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB","6mo",min_count=10), "DXY")
-    dxy        = dxy_closes[-1] if dxy_closes else None   # 🔧 v10.9: 실패 시 가짜값(118) 대신 None
+    dxy        = dxy_closes[-1] if dxy_closes else None   # 🔧 v10.10: 실패 시 가짜값(118) 대신 None
     dxy_mom    = get_dxy_momentum(dxy_closes) if dxy_closes else None
     if not dxy_closes: api_errors.append("DXY")
 
@@ -927,7 +928,7 @@ def main():
         except: pass
 
     regime_info = dict(get_macro_regime(current_ism, unrate, sahm))
-    # 🔧 v10.9: ISM 미갱신 시 골디락스 할인 중단 (낡은 데이터로 점수 깎지 않기)
+    # 🔧 v10.10: ISM 미갱신 시 골디락스 할인 중단 (낡은 데이터로 점수 깎지 않기)
     if days_since_update > ISM_STALE_DAYS and regime_info["score_adj"] < 0:
         regime_info["score_adj"] = 0.0
         regime_info["action"] += " ※ ISM 미갱신 → 할인 미적용"
@@ -1016,7 +1017,7 @@ def main():
     raw_score = min(SCORE_MAX, raw_score) # 15점 만점 제한
     diff_str   = f"{(raw_score-prev_score):+.1f}"
 
-    # ── 🆕 v10.9 금리 스트레스 판정 ──
+    # ── 🆕 v10.10 금리 스트레스 판정 ──
     rate_stress = ((move is not None and move >= LEV_MOVE_MAX) or
                    (us10y_20d is not None and abs(us10y_20d) >= US10Y_20D_WARN))
     rate_equity_selloff = (spx_20d is not None and spx_20d < 0 and
@@ -1053,30 +1054,44 @@ def main():
     })
 
     # ── 국면 결정 ──
+    # 🆕 v10.10 (백테스트 1991~2026 근거)
+    #  ① 코어 상시보유: 지수의 CORE_HOLD_PCT%는 어떤 신호에도 매도 안 함
+    #     → 2010~ CAGR 8.7%→10.0%, MDD -25.6%→-23.1% (시스템 70% + 코어 30%, ②포함)
+    #  ② 50일선 위에서는 80% 밑으로 줄이지 않음 (V자 조정 중 저점 매도 완화)
+    sma50   = sum(spy_closes[-50:]) / 50 if spy_closes and len(spy_closes) >= 50 else None
+    above50 = sma50 is not None and spy_raw[0] > sma50
+    f_floor = (not is_panic) and above50 and decision_score >= 7
+    core    = CORE_HOLD_PCT / 100
+    adj     = lambda p: round(p * (1 - core))
     if is_panic:
-        stage_label, weight = "💀 패닉 구간", 0
-        sell_idx, sell_div  = "100% (전량)", "50% (절반 유지)"
-        stage_action = "기존 자산 현금화 대피 (배당 파이프라인 절반 유지)"
+        stage_label, base_w, idx_cut = "💀 패닉 구간", 0, 100
+        sell_div     = "50% (절반 유지)"
+        stage_action = "기존 자산 현금화 대피 (코어·배당 파이프라인 유지)"
     elif decision_score < 3:
-        stage_label, weight = "🟢 공격적 매수", 100
-        sell_idx, sell_div  = "0%", "0%"
+        stage_label, base_w, idx_cut = "🟢 공격적 매수", 100, 0
+        sell_div     = "0%"
         stage_action = "주식 비중 100% 유지 및 추가 매수(수량 확보)"
-    elif decision_score < 7:
-        stage_label, weight = "🔵 적극적 유지", 80
-        sell_idx, sell_div  = "20%", "10%"
-        stage_action = "1차 수익 실현 (잔파도 무시, 20%만 현금화)"
+    elif decision_score < 7 or f_floor:
+        stage_label, base_w, idx_cut = "🔵 적극적 유지", 80, 20
+        sell_div     = "10%"
+        stage_action = f"1차 수익 실현 (잔파도 무시, {adj(20)}%만 현금화)"
+        if f_floor:
+            stage_label  += " (50일선 위 → 추가 매도 유보)"
+            stage_action += f"\n └ 점수 {decision_score:.1f}점이나 S&P가 50일선 위 → 50일선 이탈 시 다음 단계 진행"
     elif decision_score < 11:
-        stage_label, weight = "🟡 부분 방어", 50
-        sell_idx, sell_div  = "50%", "20%"
-        stage_action = "2차 수익 실현 (본격 하락 대비, 누적 50% 현금화)"
+        stage_label, base_w, idx_cut = "🟡 부분 방어", 50, 50
+        sell_div     = "20%"
+        stage_action = f"2차 수익 실현 (본격 하락 대비, 누적 {adj(50)}% 현금화)"
     elif decision_score < 13:
-        stage_label, weight = "🟠 적극적 축소", 20
-        sell_idx, sell_div  = "80%", "30%"
-        stage_action = "3차 수익 실현 (위기 직전, 누적 80% 현금화)"
+        stage_label, base_w, idx_cut = "🟠 적극적 축소", 20, 80
+        sell_div     = "30%"
+        stage_action = f"3차 수익 실현 (위기 직전, 누적 {adj(80)}% 현금화)"
     else:
-        stage_label, weight = "🔴 위험 회피", 0
-        sell_idx, sell_div  = "100% (전량)", "50% (절반 유지)"
-        stage_action = "대피 및 폭풍우 관망 (배당으로 멘탈 방어)"
+        stage_label, base_w, idx_cut = "🔴 위험 회피", 0, 100
+        sell_div     = "50% (절반 유지)"
+        stage_action = "대피 및 폭풍우 관망 (코어·배당으로 멘탈 방어)"
+    weight   = round(CORE_HOLD_PCT + base_w * (1 - core))
+    sell_idx = f"{adj(idx_cut)}%" + (f" (코어 {CORE_HOLD_PCT}% 제외 전량)" if idx_cut == 100 else "")
 
     # ── 위기 대피처 (13점+ or 패닉 시에만 표시) ──
     crisis_hedge_str = ""
@@ -1089,10 +1104,10 @@ def main():
     special_alert  = ""
     if is_panic:
         special_alert = ("\n\n🚨 ⚡ [블랙스완 감지] 일일 -4% 이상 폭락!\n"
-                         "▶ 묻지도 따지지도 말고 즉시 100% 대피하십시오.")
-    elif decision_score >= 13:
+                         "▶ 묻지도 따지지도 말고 코어를 제외하고 즉시 대피하십시오.")
+    elif decision_score >= 13 and not f_floor:
         special_alert = ("\n\n🚨 💀 [긴급 대피 시그널] 매크로 경제 붕괴 확정!\n"
-                         "▶ 모든 자산을 현금화하고 관망하십시오.")
+                         "▶ 코어를 제외한 자산을 현금화하고 관망하십시오.")
     elif lev["phase"] == "B" and lev["weight"] > 0:
         special_alert = ("\n\n🚀 🚨 [레버리지 바닥 신호 발동!]\n"
                          f"▶ 3중 조건 충족! 레버리지 ETF {lev['weight']:.0f}% 집중 투입 타이밍입니다.")
@@ -1133,7 +1148,7 @@ def main():
     extreme_fear_alert = (f"\n🔔 극단적 공포 감지 (F&G={fg_score}) → 역발상 분할매수 검토\n"
                           if is_extreme_fear else "")
 
-    # 🆕 v10.9 금리 표시
+    # 🆕 v10.10 금리 표시
     d1 = (us10y[0]-us10y[1]) if us10y[0] is not None and us10y[1] is not None else 0.0
     if us10y[0] is not None:
         d20_s     = f"{us10y_20d:+.2f}%p" if us10y_20d is not None else "-"
@@ -1154,7 +1169,7 @@ def main():
     if overheat_sigs: overheat_str += f"\n └ {', '.join(overheat_sigs)}"
 
     # ── 헤더 ──
-    msg_header = f"🤖 퀀텀 인사이트 v10.9  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v10.10  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
         msg_header += f"\n✅ ISM 지수 {current_ism}로 갱신 완료!"
     elif days_since_update > 35:
@@ -1181,7 +1196,7 @@ def main():
 🚦 국면: {stage_label}
 🌡️ 과열 게이지: {overheat_str}
 
-🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%
+🎯 자산 배분: 주식 {weight}%  |  현금 {100-weight}%  (코어 {CORE_HOLD_PCT}% 포함)
 📢 매도 지침:
  ├ 📈 지수/성장(QQQ, SPY): 【 {sell_idx} 】
  └ 💰 인컴/커버드콜 (SCHD 제외): 【 {sell_div} 】
@@ -1212,7 +1227,8 @@ def main():
 📈 시장 지수
 
 S&P 500: {fmt_idx_compact(*spy_raw)}
- └ 52주 고점 대비: {get_drawdown_label(spy_dd)}
+ ├ 52주 고점 대비: {get_drawdown_label(spy_dd)}
+ └ 50일선: {f'{gap(spy_raw[0], sma50):+.1f}%  ' + ('✅ 위' if above50 else '⚠️ 아래') if sma50 else '지연'}
 NASDAQ : {fmt_idx_compact(*qqq_raw)}
  └ 52주 고점 대비: {get_drawdown_label(qqq_dd)}
 KOSPI  : {fmt_idx_compact(*kospi_raw)}
@@ -1296,7 +1312,7 @@ RSI(S&P): {get_rsi_label(rsi)}
                hy_spread=hy_now, us10y=us10y[0], fx=fx_data[0],
                move=move, us10y_20d=us10y_20d)
 
-    log(f"✅ v10.9 완료 | 국면={regime_info['name']} | "
+    log(f"✅ v10.10 완료 | 국면={regime_info['name']} | "
         f"점수={raw_score:.1f} (경고 {warn_sum:+.1f} / 완화 {relief_sum:+.1f}) | "
         f"과열={overheat_n}/5 | 금리스트레스={rate_stress} | "
         f"LEV={lev['weight']:.1f}% (Phase {lev['phase']})")
