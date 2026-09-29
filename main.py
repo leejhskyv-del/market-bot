@@ -14,7 +14,7 @@ def log(msg): logging.info(msg)
 UNRATE_THRESHOLD = 4.2
 VIX              = {"warn": 20, "danger": 30, "panic": 40}
 FX_GAP           = {"caution": 4, "danger": 8}
-DXY              = {"warn": 105, "danger": 110}   # 🔧 v10.8: 122/126은 DXY 기준 사실상 도달 불가(2001년 이후 최고 ~114) → 현실화
+DXY              = {"warn": 105, "danger": 110}   # 🔧 v10.9: 122/126은 DXY 기준 사실상 도달 불가(2001년 이후 최고 ~114) → 현실화
 SPY_PANIC_DROP   = -4.0
 SPY_TREND_GAP    = 3.0
 SCORE_MAX        = 15.0
@@ -27,7 +27,8 @@ DRAWDOWN_DANGER  = -20.0
 AI_WEIGHT        = 0.5
 
 # ==========================================
-# 🆕 v10.8 금리 변동성 모듈 (⚠️ 미백테스트 초기값)
+# 📐 금리 변동성 모듈 — v10.9: 표시 전용
+#   백테스트(1991~2026) 결과 점수·레버리지 차단에 넣으면 성과 악화 → 경보 표시만
 # ==========================================
 MOVE                 = {"warn": 120, "danger": 140}  # 채권 변동성 지수
 US10Y_20D_WARN       = 0.40   # 10Y 20영업일 변동폭 (%p)
@@ -36,7 +37,8 @@ RATE_EQ_SELLOFF_10Y  = 0.25   # 주식↓ + 금리↑ 동반 시 (금리발 조�
 LEV_MOVE_MAX         = 120    # 골디락스 레버리지 금리변동성 게이트
 
 # ==========================================
-# 🆕 v10.8 과열 게이지 (점수에 미반영, 레버리지·메시지에만 사용)
+# 🌡️ 과열 게이지 — v10.9: 표시 전용
+#   백테스트: 200일선 +12%↑ 이후 12개월 평균 +13.6% (전체 평균 +10.1%) → 매도·감산 근거 없음
 # ==========================================
 SPX_EXT_HOT     = 12.0   # S&P 200일선 이격 %
 RSI_HOT         = 70
@@ -44,6 +46,7 @@ FG_GREED_HOT    = 75
 HY_COMPLACENT   = 3.0    # HY 스프레드 과도한 안도
 OVERHEAT_ALERT  = 3      # 5개 중 3개 이상 → 과열 경보
 ISM_STALE_DAYS  = 45     # ISM 미갱신 시 골디락스 할인 중단
+SAHM_TRIGGER    = 0.5    # 🆕 v10.9: 고용 판정 (실업률 3개월평균 - 12개월 최저)
 
 # ==========================================
 # 🚀 LEV 통합 엔진 파라미터 (v10.5 백테스트 검증)
@@ -206,12 +209,16 @@ def get_fred_series(series_id, days=1000, min_count=1):
     return values
 
 def get_us10y_hist():
-    """🆕 v10.8: 20영업일 변동폭 산출용으로 히스토리 반환"""
+    """🆕 v10.9: 20영업일 변동폭 산출용으로 히스토리 반환"""
     return get_fred_series("DGS10", days=90, min_count=25)
 def get_hy_spread():
     v = get_fred_series("BAMLH0A0HYM2", days=60, min_count=5); return v[-1], v[-2]
 def get_unrate():
-    v = get_fred_series("UNRATE", days=365, min_count=1); return v[-1] if v else 4.0
+    """🆕 v10.9: (최신 실업률, Sahm 지표) 반환"""
+    v = get_fred_series("UNRATE", days=600, min_count=15)
+    u3 = [sum(v[i-2:i+1])/3 for i in range(2, len(v))]
+    sahm = u3[-1] - min(u3[-13:-1]) if len(u3) >= 13 else None
+    return v[-1], sahm
 
 def get_yahoo_closes(ticker, range_="2y", min_count=20):
     url  = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={range_}"
@@ -331,7 +338,7 @@ def get_gold_signal(gold):
     return "➖ 중립"
 
 # ==========================================
-# 🌡️ 과열 게이지 (v10.8)
+# 🌡️ 과열 게이지 (v10.9)
 # ==========================================
 def calc_overheat(spy_raw, rsi, fg_score, hy_now, breadth_status):
     sigs = []
@@ -347,7 +354,10 @@ def calc_overheat(spy_raw, rsi, fg_score, hy_now, breadth_status):
 # ==========================================
 # 🧭 매크로 국면 판독
 # ==========================================
-def get_macro_regime(ism, unrate):
+def get_macro_regime(ism, unrate, sahm=None):
+    # 🔧 v10.9: 실업률 절대값(4.2%)은 1991년 이후 22% 기간만 충족 → 추세(Sahm) 기준으로 고용 판정
+    emp_ok = (sahm < SAHM_TRIGGER) if sahm is not None else (unrate <= UNRATE_THRESHOLD)
+    unrate = UNRATE_THRESHOLD if emp_ok else UNRATE_THRESHOLD + 1
     if ism >= 50.0 and unrate <= UNRATE_THRESHOLD:
         return {"emoji":"🟢","name":"골디락스 (안정적 성장)","score_adj":-1.5,
                 "action":"최적 환경. 단기 노이즈 무시 (레버리지 홀딩 우대)"}
@@ -369,13 +379,19 @@ def _update_bottom_tracker(spy_closes, vix_closes, spy_dd, state):
     vix_now     = vix_closes[-1]
     vix_peak    = state.get("lev_vix_peak", 0.0)
     crisis_days = state.get("lev_crisis_days", 0)
+    dd_min      = state.get("lev_dd_min", 0.0)
+    today       = datetime.now().strftime("%Y-%m-%d")
+    new_day     = state.get("lev_last_day") != today   # 🔧 v10.9: 하루 2회 실행돼도 1일로만 카운트
     if spy_dd is not None and spy_dd <= -10.0:
-        crisis_days += 1
+        if new_day: crisis_days += 1
         if vix_now and vix_now > vix_peak: vix_peak = vix_now
+        dd_min = min(dd_min, spy_dd)
     elif spy_dd is not None and spy_dd > -5.0:
-        vix_peak = 0.0; crisis_days = 0
+        vix_peak = 0.0; crisis_days = 0; dd_min = 0.0
     state["lev_vix_peak"]    = round(vix_peak, 2)
     state["lev_crisis_days"] = crisis_days
+    state["lev_dd_min"]      = round(dd_min, 2)
+    state["lev_last_day"]    = today
     return state
 
 def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
@@ -383,7 +399,10 @@ def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
     vix_now     = vix_closes[-1]
     vix_peak    = state.get("lev_vix_peak", 0.0)
     crisis_days = state.get("lev_crisis_days", 0)
-    c1 = spy_dd is not None and spy_dd <= BOTTOM_DD_MIN
+    # 🔧 v10.9: 이번 하락 에피소드 중 최대낙폭 기준 (래치)
+    #   기존: '현재 DD ≤ -20% & VIX ≤ 30' 동시 충족이 거의 불가 → 2020·2025 바닥 신호 미발동
+    dd_min = min(state.get("lev_dd_min", 0.0), spy_dd if spy_dd is not None else 0.0)
+    c1 = dd_min <= BOTTOM_DD_MIN
     c2 = vix_peak >= BOTTOM_VIX_PEAK
     c3_rally = (len(spy_closes) >= BOTTOM_CONSEC + 1 and
                 all(spy_closes[i] > spy_closes[i-1] for i in range(-BOTTOM_CONSEC, 0)))
@@ -394,7 +413,7 @@ def _check_bottom_conditions(spy_closes, vix_closes, spy_dd, state):
     count       = sum([c1, c2, c3])
     all_met     = c1 and c2 and c3 and min_wait
     dd_str      = f"{spy_dd:.1f}%" if spy_dd is not None else "-"
-    detail      = (f"DD:{dd_str}{'✅' if c1 else '❌'} "
+    detail      = (f"DD:{dd_str}(최대 {dd_min:.1f}%){'✅' if c1 else '❌'} "
                    f"VIX피크:{vix_peak:.0f}{'✅' if c2 else '❌'} "
                    f"반등{'✅' if c3 else '❌'} "
                    f"({crisis_days}일/{BOTTOM_MIN_DAYS}일)")
@@ -443,11 +462,7 @@ def calc_lev_unified(decision_score, ism, vix, spy_closes, vix_closes,
         return {"weight":0.0,"phase":"C","phase_name":"⚪ RSI차단",
                 "reason":f"RSI 과매도 ({rsi}) → 공황 구간, 안정 대기",
                 "bottom_detail":bottom_detail,"state":state}
-    # 🆕 v10.8: 금리 변동성 게이트 (레버리지 변동성 손실 방지)
-    if rate_stress:
-        return {"weight":0.0,"phase":"C","phase_name":"⚪ 금리변동성차단",
-                "reason":"채권 변동성 급등 (MOVE/10Y 20일 변동폭) → 레버리지 변동성 손실 위험",
-                "bottom_detail":bottom_detail,"state":state}
+    # 🔧 v10.9: 금리 변동성 차단 제거 — 백테스트상 차단된 신호의 3개월 성과가 오히려 우수(+10.9% vs +4.4%)
 
     ratio  = (LEV_C_SCORE_TOP - decision_score) / LEV_C_SCORE_TOP
     weight = round(LEV_C_MAX * (ratio ** LEV_C_EXP) * 100, 1)
@@ -455,11 +470,8 @@ def calc_lev_unified(decision_score, ism, vix, spy_closes, vix_closes,
     ism_s  = f"{ism:.1f}" if ism is not None else "-"
     name   = "🟢 골디락스"
     reason = f"골디락스 진입 (VIX:{vix_s}, ISM:{ism_s})"
-    # 🆕 v10.8: 과열 게이지 3개 이상 → 비중 절반
     if overheat_n >= OVERHEAT_ALERT:
-        weight = round(weight * 0.5, 1)
-        name   = "🟠 골디락스(과열 감산)"
-        reason += f" / 과열 신호 {overheat_n}개 → 비중 50% 감산"
+        reason += f" / 과열 신호 {overheat_n}개 (참고용, 감산 없음)"
     return {"weight":weight,"phase":"C","phase_name":name,
             "reason":reason,"bottom_detail":bottom_detail,"state":state}
 
@@ -579,7 +591,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
                     us10y, fg_score, hy_spread, spy_dd, gold, rsi, is_recovering,
                     regime_adj, is_bull, breadth_status, recent_score_jump,
                     move=None, us10y_20d=None, spx_20d=None):
-    """🔧 v10.8: 경고(+)와 완화(-)를 분리 집계 → (최종점수, 경고합, 완화합) 반환"""
+    """🔧 v10.9: 경고(+)와 완화(-)를 분리 집계 → (최종점수, 경고합, 완화합) 반환"""
     warn, relief = 0.0, 0.0
     def add(v):
         nonlocal warn, relief
@@ -621,15 +633,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
     if us10y and us10y[0] and us10y[1]:
         if us10y[0]-us10y[1] > 0.15: add(1.5)
 
-    # 🆕 v10.8 금리 변동성
-    if move is not None:
-        if move >= MOVE["danger"]: add(2.0)
-        elif move >= MOVE["warn"]: add(1.0)
-    if us10y_20d is not None:
-        if us10y_20d >= US10Y_20D_DANGER: add(1.5)
-        elif us10y_20d >= US10Y_20D_WARN: add(1.0)
-        if spx_20d is not None and spx_20d < 0 and us10y_20d >= RATE_EQ_SELLOFF_10Y:
-            add(1.0); log("⚠️ 금리발 주식 조정 감지: +1.0")
+    # 🔧 v10.9: 금리 변동성(MOVE·20일 변동폭)은 점수 미반영 — 백테스트상 수익 감소(특히 2022 반등 놓침), 표시만
 
     if hy_spread and hy_spread[0]:
         hys = hy_spread[0]
@@ -647,7 +651,7 @@ def calc_risk_score(spy, qqq, kospi, fx_data, vix, vix_trend, dxy, dxy_mom, ai_s
         if dxy is not None and dxy > DXY["warn"] and gold_gap > 5: add(1.5)
     if is_recovering:
         add(-1.6); log("✨ V자 회복 모멘텀 감지: -1.6 적용")
-    # 🔧 v10.8: 강세장 필터와 골디락스 할인 중복 방지 (둘 중 큰 할인 하나만)
+    # 🔧 v10.9: 강세장 필터와 골디락스 할인 중복 방지 (둘 중 큰 할인 하나만)
     bull_adj = -1.0 if is_bull else 0.0
     if regime_adj < 0:
         add(min(bull_adj, regime_adj))
@@ -733,7 +737,7 @@ def send_weekly_summary(state, history):
     next_mon = today + timedelta(days=(7 - today.weekday()))
     next_mon_str = next_mon.strftime("%m월 %d일 (월)")
 
-    msg = f"""🤖 퀀텀 인사이트 v10.8  |  주간 요약
+    msg = f"""🤖 퀀텀 인사이트 v10.9  |  주간 요약
 {today.strftime('%Y.%m.%d')} 토요일
 ━━━━━━━━━━━━━━━━━━
 📅 이번 주 위험 점수 (월~금)
@@ -788,7 +792,7 @@ VIX 범위     : {vix_str}
 # 🚀 메인 실행부
 # ==========================================
 def main():
-    log("📊 퀀텀 하이브리드 v10.8 가동")
+    log("📊 퀀텀 하이브리드 v10.9 가동")
 
     TEST_MODE = False   # ← 테스트할 때 True, 평소엔 False
 
@@ -874,7 +878,7 @@ def main():
     gold      = safe(lambda: get_gold_data(), "GOLD")
     if not gold: api_errors.append("GOLD")
 
-    # 🆕 v10.8: 10Y 히스토리 → 전일/20일 변동폭
+    # 🆕 v10.9: 10Y 히스토리 → 전일/20일 변동폭
     us10y_hist = safe(lambda: get_us10y_hist(), "10Y")
     if us10y_hist:
         us10y     = (us10y_hist[-1], us10y_hist[-2])
@@ -882,15 +886,16 @@ def main():
     else:
         us10y = (None, None); us10y_20d = None; api_errors.append("10Y")
 
-    # 🆕 v10.8: MOVE (채권 변동성)
+    # 🆕 v10.9: MOVE (채권 변동성)
     move_closes = safe(lambda: get_yahoo_closes("^MOVE","3mo",min_count=10), "MOVE", retry=2, delay=5)
     move = move_closes[-1] if move_closes else None
     if move is None: api_errors.append("MOVE")
 
     hy_spread = safe(lambda: get_hy_spread(), "HY")
     if not hy_spread: hy_spread=(None,None); api_errors.append("HY스프레드")
-    unrate    = safe(lambda: get_unrate(), "실업률")
-    if not unrate: unrate=4.0; api_errors.append("실업률")
+    _ur       = safe(lambda: get_unrate(), "실업률")
+    if _ur: unrate, sahm = _ur
+    else:   unrate, sahm = 4.0, None; api_errors.append("실업률")
 
     breadth_status = get_market_breadth()
 
@@ -907,7 +912,7 @@ def main():
     if not vix_closes: api_errors.append("VIX")
 
     dxy_closes = safe(lambda: get_yahoo_closes("DX-Y.NYB","6mo",min_count=10), "DXY")
-    dxy        = dxy_closes[-1] if dxy_closes else None   # 🔧 v10.8: 실패 시 가짜값(118) 대신 None
+    dxy        = dxy_closes[-1] if dxy_closes else None   # 🔧 v10.9: 실패 시 가짜값(118) 대신 None
     dxy_mom    = get_dxy_momentum(dxy_closes) if dxy_closes else None
     if not dxy_closes: api_errors.append("DXY")
 
@@ -921,8 +926,8 @@ def main():
                 is_recovering = True
         except: pass
 
-    regime_info = dict(get_macro_regime(current_ism, unrate))
-    # 🔧 v10.8: ISM 미갱신 시 골디락스 할인 중단 (낡은 데이터로 점수 깎지 않기)
+    regime_info = dict(get_macro_regime(current_ism, unrate, sahm))
+    # 🔧 v10.9: ISM 미갱신 시 골디락스 할인 중단 (낡은 데이터로 점수 깎지 않기)
     if days_since_update > ISM_STALE_DAYS and regime_info["score_adj"] < 0:
         regime_info["score_adj"] = 0.0
         regime_info["action"] += " ※ ISM 미갱신 → 할인 미적용"
@@ -1011,7 +1016,7 @@ def main():
     raw_score = min(SCORE_MAX, raw_score) # 15점 만점 제한
     diff_str   = f"{(raw_score-prev_score):+.1f}"
 
-    # ── 🆕 v10.8 금리 스트레스 판정 ──
+    # ── 🆕 v10.9 금리 스트레스 판정 ──
     rate_stress = ((move is not None and move >= LEV_MOVE_MAX) or
                    (us10y_20d is not None and abs(us10y_20d) >= US10Y_20D_WARN))
     rate_equity_selloff = (spx_20d is not None and spx_20d < 0 and
@@ -1039,11 +1044,12 @@ def main():
     lev = calc_lev_unified(
         decision_score=decision_score, ism=current_ism, vix=vix,
         spy_closes=spy_closes, vix_closes=vix_closes, spy_dd=spy_dd,
-        rsi=rsi, is_panic=is_panic, state=state,
-        rate_stress=rate_stress, overheat_n=overheat_n)
+        rsi=rsi, is_panic=is_panic, state=state, overheat_n=overheat_n)
     state.update({
         "lev_vix_peak":    lev["state"].get("lev_vix_peak", 0.0),
         "lev_crisis_days": lev["state"].get("lev_crisis_days", 0),
+        "lev_dd_min":      lev["state"].get("lev_dd_min", 0.0),
+        "lev_last_day":    lev["state"].get("lev_last_day"),
     })
 
     # ── 국면 결정 ──
@@ -1094,11 +1100,11 @@ def main():
         special_alert = ("\n\n🚀 🚨 [특별 시그널] V자 폭발적 반등 포착!\n"
                          "▶ 하락장 종료 확정! 대피 현금을 레버리지 ETF에 집중 투입하십시오.")
     elif overheat_n >= OVERHEAT_ALERT:
-        special_alert = ("\n\n🌡️ [과열 경보] 추세는 살아있으나 가격이 앞서 나갔습니다.\n"
-                         "▶ 매도 신호 아님. 지수 적립은 유지, 레버리지 신규 매수만 절반으로.")
+        special_alert = ("\n\n🌡️ [과열 경보] 가격이 추세보다 앞서 나간 상태 (참고용)\n"
+                         "▶ 과거엔 이런 구간 이후 수익률이 평균 이상. 매도·감산 신호 아님, 계획대로.")
     elif rate_stress:
-        special_alert = ("\n\n📐 [금리 변동성 경보] 채권시장 흔들림 감지.\n"
-                         "▶ 레버리지 신규 매수 보류. 지수 적립은 계획대로.")
+        special_alert = ("\n\n📐 [금리 변동성 경보] 채권시장 흔들림 감지 (참고용)\n"
+                         "▶ 단독으로는 매매 근거 약함. 주가·VIX 신호가 따라붙는지 확인.")
     elif (decision_score == 0 and spy_dd is not None and spy_dd >= 0
           and overheat_n == 0 and not rate_stress):
         special_alert = ("\n\n🌈 ✨ [골디락스 시그널] 대세 상승장 + 과열·금리 스트레스 없음\n"
@@ -1127,7 +1133,7 @@ def main():
     extreme_fear_alert = (f"\n🔔 극단적 공포 감지 (F&G={fg_score}) → 역발상 분할매수 검토\n"
                           if is_extreme_fear else "")
 
-    # 🆕 v10.8 금리 표시
+    # 🆕 v10.9 금리 표시
     d1 = (us10y[0]-us10y[1]) if us10y[0] is not None and us10y[1] is not None else 0.0
     if us10y[0] is not None:
         d20_s     = f"{us10y_20d:+.2f}%p" if us10y_20d is not None else "-"
@@ -1148,7 +1154,7 @@ def main():
     if overheat_sigs: overheat_str += f"\n └ {', '.join(overheat_sigs)}"
 
     # ── 헤더 ──
-    msg_header = f"🤖 퀀텀 인사이트 v10.8  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
+    msg_header = f"🤖 퀀텀 인사이트 v10.9  |  {datetime.now().strftime('%Y.%m.%d %H:%M')}"
     if new_ism is not None:
         msg_header += f"\n✅ ISM 지수 {current_ism}로 갱신 완료!"
     elif days_since_update > 35:
@@ -1215,7 +1221,7 @@ RSI(S&P): {get_rsi_label(rsi)}
 ━━━━━━━━━━━━━━━━━━
 🌍 매크로 환경
 
- ├ ISM 제조업: {current_ism}  /  실업률: {unrate}%
+ ├ ISM 제조업: {current_ism}  /  실업률: {unrate}%  (Sahm {f"{sahm:+.2f}" if sahm is not None else "-"} {'⚠️' if sahm is not None and sahm >= SAHM_TRIGGER else '✅'})
  ├ 국면: {regime_info['emoji']} {regime_info['name']}
  └ 보정: {regime_info['action']} ({regime_info['score_adj']:+.1f}점){trend_section}
 ━━━━━━━━━━━━━━━━━━
@@ -1280,6 +1286,8 @@ RSI(S&P): {get_rsi_label(rsi)}
         "daily_log":        daily_log[-365:],
         "lev_vix_peak":     state.get("lev_vix_peak", 0.0),
         "lev_crisis_days":  state.get("lev_crisis_days", 0),
+        "lev_dd_min":       state.get("lev_dd_min", 0.0),
+        "lev_last_day":     state.get("lev_last_day"),
     }
 
     save_state(new_state_data, existing_history=history,
@@ -1288,7 +1296,7 @@ RSI(S&P): {get_rsi_label(rsi)}
                hy_spread=hy_now, us10y=us10y[0], fx=fx_data[0],
                move=move, us10y_20d=us10y_20d)
 
-    log(f"✅ v10.8 완료 | 국면={regime_info['name']} | "
+    log(f"✅ v10.9 완료 | 국면={regime_info['name']} | "
         f"점수={raw_score:.1f} (경고 {warn_sum:+.1f} / 완화 {relief_sum:+.1f}) | "
         f"과열={overheat_n}/5 | 금리스트레스={rate_stress} | "
         f"LEV={lev['weight']:.1f}% (Phase {lev['phase']})")
